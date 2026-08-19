@@ -1,0 +1,248 @@
+import AppKit
+import ConductorCore
+import SwiftUI
+
+struct StackView: View {
+	@Bindable var model: StackViewModel
+	@Bindable var logModel: LogViewModel
+
+	@Environment(\.accessibilityReduceMotion) private var reduceMotion
+	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+	@AppStorage(PreferenceKey.host) private var host = PreferenceDefault.host
+	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
+	@AppStorage(PreferenceKey.logBufferLines) private var bufferLines = PreferenceDefault.logBufferLines
+	@AppStorage(PreferenceKey.logBackfill) private var backfill = PreferenceDefault.logBackfill
+
+	var body: some View {
+		VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
+			content
+		} bottom: {
+			LogPane(model: logModel)
+		}
+		.overlay(alignment: .bottom) { errorBar }
+		.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
+		.navigationTitle(model.project?.projectName ?? "Conductor")
+		.navigationSubtitle(subtitle)
+		.toolbar { toolbar }
+		.task {
+			logModel.maxLines = bufferLines
+			logModel.backfill = backfill
+			reconnect()
+		}
+		.onChange(of: address) { _, _ in reconnect() }
+		.onChange(of: bufferLines) { _, lines in logModel.maxLines = lines }
+		.onChange(of: backfill) { _, lines in logModel.backfill = lines }
+		.onChange(of: model.selection) { _, name in logModel.select(name) }
+		.confirmationDialog(
+			"Stop every running process?",
+			isPresented: $model.isConfirmingStopStack
+		) {
+			Button("Stop the stack", role: .destructive) {
+				Task { await model.stopStack() }
+			}
+		}
+	}
+
+	@ToolbarContentBuilder
+	private var toolbar: some ToolbarContent {
+		ToolbarItem(placement: .status) {
+			HStack(spacing: 12) {
+				HStack(spacing: 6) {
+					Circle()
+						.fill(isConnected ? Color.green : Color.red)
+						.frame(width: 8, height: 8)
+					Text(isConnected ? "Connected" : "Offline")
+						.font(.callout)
+						.foregroundStyle(.secondary)
+				}
+				.accessibilityElement(children: .ignore)
+				.accessibilityLabel(isConnected ? "Connected to the server" : "Not connected to the server")
+
+				if isConnected {
+					Divider()
+						.frame(height: 12)
+					usageReadout
+				}
+			}
+		}
+
+		ToolbarItem(placement: .primaryAction) {
+			powerControl
+		}
+	}
+
+	@ViewBuilder
+	private var powerControl: some View {
+		if model.isChangingStack {
+			ProgressView()
+				.controlSize(.small)
+				.accessibilityLabel("Working on the stack")
+		} else {
+			Button(powerTitle, systemImage: "power") {
+				if model.power == .canStop {
+					model.isConfirmingStopStack = true
+				} else {
+					Task { await model.startStack() }
+				}
+			}
+			.labelStyle(.titleAndIcon)
+			.disabled(!isConnected || model.power == .unavailable)
+			.help(model.power == .canStop ? "Stop every running process" : "Start every process the stack defines")
+		}
+	}
+
+	private var powerTitle: String {
+		model.power == .canStop ? "Stop Stack" : "Start Stack"
+	}
+
+	@ViewBuilder
+	private var content: some View {
+		if case .disconnected(let reason) = model.connection {
+			ContentUnavailableView {
+				Label("No stack running", systemImage: "bolt.horizontal.circle")
+			} description: {
+				Text(reason)
+				Text("Start it with `make up` in acme. Conductor reconnects on its own.")
+					.font(.callout)
+			}
+		} else if model.processes.isEmpty {
+			ProgressView("Connecting")
+				.frame(maxWidth: .infinity, maxHeight: .infinity)
+		} else {
+			List(selection: $model.selection) {
+				ForEach(model.sections) { section in
+					Section {
+						ForEach(section.processes) { state in
+							ProcessRow(
+								state: state,
+								kind: section.kind,
+								isBusy: model.busy.contains(state.name),
+								start: { Task { await model.startProcess(state.name) } },
+								stop: { Task { await model.stopProcess(state.name) } },
+								restart: { Task { await model.restartProcess(state.name) } }
+							)
+							.tag(state.name)
+							.contextMenu {
+								Button("Start") { Task { await model.startProcess(state.name) } }
+									.disabled(!state.canStart)
+								Button("Restart") { Task { await model.restartProcess(state.name) } }
+									.disabled(!state.canStop)
+								Button("Stop") { Task { await model.stopProcess(state.name) } }
+									.disabled(!state.canStop)
+								Divider()
+								Button("Show Log") { model.selection = state.name }
+								Button("Copy Name") { copy(state.name) }
+							}
+						}
+					} header: {
+						sectionHeader(for: section)
+					}
+				}
+			}
+			.listStyle(.inset)
+		}
+	}
+
+	/// Project, namespace and role, each shown only where it changes, so the reader
+	/// sees four levels without four repeated lines on every section.
+	private func sectionHeader(for section: StackSection) -> some View {
+		// A pinned header only reserves the height of its content, so the breathing room
+		// goes on the labels themselves. Padding the container makes it cover the first row.
+		VStack(alignment: .leading, spacing: 6) {
+			if let project = section.project, section.isFirstInProject {
+				Text(project)
+					.font(.title2.weight(.bold))
+					.foregroundStyle(.primary)
+					.padding(.top, 16)
+			}
+			if section.isFirstInNamespace {
+				Text(section.namespace)
+					.font(.title3.weight(.semibold))
+					.foregroundStyle(.secondary)
+					.padding(.top, section.isFirstInProject ? 0 : 14)
+					.padding(.leading, section.project == nil ? 0 : 10)
+			}
+			if section.showsKind {
+				Text(section.kind.label)
+					.font(.body.weight(.medium))
+					.foregroundStyle(.tertiary)
+					.padding(.top, section.isFirstInNamespace ? 0 : 14)
+					.padding(.leading, section.project == nil ? 10 : 20)
+			}
+		}
+		.textCase(nil)
+		.frame(maxWidth: .infinity, alignment: .leading)
+	}
+
+
+	@ViewBuilder
+	private var errorBar: some View {
+		if let message = model.lastError {
+			HStack(spacing: 8) {
+				Image(systemName: "exclamationmark.triangle.fill")
+					.foregroundStyle(.orange)
+				Text(message)
+					.font(.callout)
+					.textSelection(.enabled)
+				Spacer(minLength: 12)
+				Button("Dismiss") { model.dismissError() }
+					.controlSize(.small)
+			}
+			.padding(.horizontal, 12)
+			.padding(.vertical, 8)
+			.background(errorBackground, in: RoundedRectangle(cornerRadius: 8))
+			.overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
+			.padding(12)
+			.transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+		}
+	}
+
+	private var errorBackground: AnyShapeStyle {
+		reduceTransparency
+			? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+			: AnyShapeStyle(.regularMaterial)
+	}
+
+	/// Totals across every running process. A second `.status` toolbar item would be
+	/// collapsed into the overflow menu, so this lives inside the connection item.
+	private var usageReadout: some View {
+		HStack(spacing: 12) {
+			Label(model.usage.cpuLabel, systemImage: "cpu")
+			Label(model.usage.memoryLabel, systemImage: "memorychip")
+		}
+		.labelStyle(.titleAndIcon)
+		.font(.callout.monospacedDigit())
+		.foregroundStyle(.secondary)
+		.fixedSize()
+		.accessibilityElement(children: .ignore)
+		.accessibilityLabel(
+			"The stack is using \(model.usage.cpuLabel) processor and \(model.usage.memoryLabel) memory"
+		)
+		.help("Total across every running process")
+	}
+
+	private var subtitle: String {
+		guard let project = model.project else { return "Not connected" }
+		return "\(project.runningProcessNum) of \(project.processNum) running  ·  up \(project.upTime.compactLabel)  ·  \(project.version)"
+	}
+
+	private var address: ServerAddress {
+		ServerAddress(host: host, port: port)
+	}
+
+	private var isConnected: Bool {
+		model.connection == .connected
+	}
+
+	private func reconnect() {
+		let client = LiveProcessComposeClient(address: address)
+		model.use(client)
+		logModel.use(client)
+	}
+
+	private func copy(_ text: String) {
+		NSPasteboard.general.clearContents()
+		NSPasteboard.general.setString(text, forType: .string)
+	}
+}
