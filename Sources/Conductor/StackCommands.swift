@@ -29,15 +29,15 @@ struct StackCommands: Commands {
 		CommandMenu("Process") {
 			Button(title("Start")) { run(model.startProcess) }
 				.keyboardShortcut("r", modifiers: .command)
-				.disabled(!canStart)
+				.disabled(!model.canStart(model.selection))
 
 			Button(title("Restart")) { run(model.restartProcess) }
 				.keyboardShortcut("r", modifiers: [.command, .shift])
-				.disabled(!canStop)
+				.disabled(!model.canStop(model.selection))
 
 			Button(title("Stop")) { run(model.stopProcess) }
 				.keyboardShortcut(".", modifiers: .command)
-				.disabled(!canStop)
+				.disabled(!model.canStop(model.selection))
 
 			Divider()
 
@@ -47,15 +47,9 @@ struct StackCommands: Commands {
 
 			Divider()
 
-			Button(model.power == .canStop ? "Stop Stack..." : "Start Stack") {
-				if model.power == .canStop {
-					model.isConfirmingStopStack = true
-				} else {
-					Task { await model.startStack() }
-				}
-			}
-			.keyboardShortcut(".", modifiers: [.command, .control])
-			.disabled(model.connection != .connected || model.power == .unavailable || model.isChangingStack)
+			Button(model.power == .canStop ? "Stop Stack..." : "Start Stack") { model.togglePower() }
+				.keyboardShortcut(".", modifiers: [.command, .control])
+				.disabled(!model.canChangePower)
 		}
 
 		CommandMenu("Log") {
@@ -66,14 +60,6 @@ struct StackCommands: Commands {
 				.keyboardShortcut("k", modifiers: .command)
 				.disabled(logModel.selected == nil)
 		}
-	}
-
-	private var canStart: Bool {
-		model.selectedProcess?.canStart == true && !model.isBusy(model.selection)
-	}
-
-	private var canStop: Bool {
-		model.selectedProcess?.canStop == true && !model.isBusy(model.selection)
 	}
 
 	private func title(_ verb: String) -> String {
@@ -87,7 +73,6 @@ struct StackCommands: Commands {
 
 	private func copySelectedName() {
 		guard let name = model.selection else { return }
-		NSPasteboard.general.clearContents()
-		NSPasteboard.general.setString(name, forType: .string)
+		NSPasteboard.copy(name)
 	}
 }

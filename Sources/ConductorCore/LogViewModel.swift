@@ -59,13 +59,8 @@ public final class LogViewModel {
 			return
 		}
 
-		streamTask = Task { [weak self] in
-			while !Task.isCancelled {
-				guard let self else { return }
-				await self.stream()
-				guard !Task.isCancelled else { return }
-				try? await Task.sleep(for: self.retryDelay)
-			}
+		streamTask = Reconnecting.loop(every: retryDelay) { [weak self] in
+			await self?.stream()
 		}
 	}
 
@@ -102,7 +97,7 @@ public final class LogViewModel {
 
 	private func append(_ message: LogMessage) {
 		lines.append(
-			LogLine(id: nextID, processName: message.processName, spans: AnsiParser.spans(in: message.message))
+			LogLine(id: nextID, spans: AnsiParser.spans(in: message.message))
 		)
 		nextID += 1
 

@@ -42,9 +42,8 @@ struct LogTextView: NSViewRepresentable {
 
 		let coordinator = context.coordinator
 
-		if coordinator.fontSize != fontSize {
-			coordinator.fontSize = fontSize
-			coordinator.reset(storage)
+		if !coordinator.matches(fontSize: fontSize) {
+			coordinator.reset(storage, size: fontSize)
 		}
 
 		let plan = LogRendering.plan(rendered: coordinator.renderedIDs, lines: lines)
@@ -52,7 +51,7 @@ struct LogTextView: NSViewRepresentable {
 		if !plan.isEmpty {
 			storage.beginEditing()
 			coordinator.drop(plan.dropLeading, from: storage)
-			coordinator.append(plan.append, to: storage, size: fontSize)
+			coordinator.append(plan.append, to: storage)
 			storage.endEditing()
 		}
 
@@ -66,55 +65,69 @@ struct LogTextView: NSViewRepresentable {
 	/// Holds what is already drawn so an arriving line costs one append instead of a
 	/// full redraw of the buffer.
 	final class Coordinator {
-		var fontSize: Double = 0
 		var wasFollowing = true
-		private(set) var renderedIDs: [Int] = []
-		private var renderedLengths: [Int] = []
 
-		func reset(_ storage: NSTextStorage) {
+		private var rendered: [(id: Int, length: Int)] = []
+		private var fonts: (size: Double, plain: NSFont, strong: NSFont)?
+
+		var renderedIDs: [Int] { rendered.map(\.id) }
+
+		func matches(fontSize: Double) -> Bool {
+			fonts?.size == fontSize
+		}
+
+		func reset(_ storage: NSTextStorage, size: Double) {
 			storage.setAttributedString(NSAttributedString())
-			renderedIDs = []
-			renderedLengths = []
+			rendered = []
+			fonts = (
+				size,
+				NSFont.monospacedSystemFont(ofSize: size, weight: .regular),
+				NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
+			)
 		}
 
 		func drop(_ count: Int, from storage: NSTextStorage) {
 			guard count > 0 else { return }
 
-			let length = renderedLengths.prefix(count).reduce(0, +)
+			let length = rendered.prefix(count).reduce(0) { $0 + $1.length }
 			storage.deleteCharacters(in: NSRange(location: 0, length: length))
-			renderedIDs.removeFirst(count)
-			renderedLengths.removeFirst(count)
+			rendered.removeFirst(count)
 		}
 
-		func append(_ lines: [LogLine], to storage: NSTextStorage, size: Double) {
+		/// One `append` for the whole batch: a 300-line backfill would otherwise be 300
+		/// separate text-storage mutations, each triggering its own layout pass.
+		func append(_ lines: [LogLine], to storage: NSTextStorage) {
+			guard let fonts else { return }
+
+			let batch = NSMutableAttributedString()
+
 			for line in lines {
-				let drawn = Self.attributed(line, size: size)
-				storage.append(drawn)
-				renderedIDs.append(line.id)
-				renderedLengths.append(drawn.length)
+				let start = batch.length
+				draw(line, into: batch, fonts: fonts)
+				rendered.append((line.id, batch.length - start))
 			}
+
+			storage.append(batch)
 		}
 
-		private static func attributed(_ line: LogLine, size: Double) -> NSAttributedString {
-			let plain = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-			let strong = NSFont.monospacedSystemFont(ofSize: size, weight: .bold)
-			let drawn = NSMutableAttributedString()
-
+		private func draw(
+			_ line: LogLine,
+			into batch: NSMutableAttributedString,
+			fonts: (size: Double, plain: NSFont, strong: NSFont)
+		) {
 			for span in line.spans {
-				drawn.append(
+				batch.append(
 					NSAttributedString(
 						string: span.text,
 						attributes: [
-							.font: span.isBold ? strong : plain,
+							.font: span.isBold ? fonts.strong : fonts.plain,
 							.foregroundColor: span.color?.nsColor ?? NSColor.labelColor,
 						]
 					)
 				)
 			}
 
-			drawn.append(NSAttributedString(string: "\n", attributes: [.font: plain]))
-
-			return drawn
+			batch.append(NSAttributedString(string: "\n", attributes: [.font: fonts.plain]))
 		}
 	}
 }

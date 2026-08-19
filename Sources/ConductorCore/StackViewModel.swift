@@ -18,7 +18,6 @@ public enum ConnectionState: Sendable, Equatable {
 public final class StackViewModel {
 	public private(set) var connection: ConnectionState = .connecting
 	public private(set) var project: ProjectState?
-	public private(set) var busy: Set<String> = []
 	public private(set) var lastError: String?
 
 	/// The row the list and the log pane share. Owned here so the menu bar can act on it.
@@ -38,19 +37,28 @@ public final class StackViewModel {
 		processes.filter { $0.canStart && $0.status != .disabled }
 	}
 
-	/// Which way the power button points. Whether the server can act on it is a
-	/// separate question the view answers from `connection`.
+	/// Which way the power button points.
 	public var power: StackPower {
 		if !runningProcesses.isEmpty { return .canStop }
 		return startableProcesses.isEmpty ? .unavailable : .canStart
 	}
 
-	public var selectedProcess: ProcessState? {
-		selection.flatMap { statesByName[$0] }
+	/// Whether the server can act on the power button right now.
+	public var canChangePower: Bool {
+		connection == .connected && !isChangingStack && power != .unavailable
 	}
 
-	public var namespaces: [String] {
-		Array(Set(statesByName.values.map(\.namespace))).sorted()
+	/// Stopping asks first because it is destructive; starting does not.
+	public func togglePower() {
+		switch power {
+		case .canStop: isConfirmingStopStack = true
+		case .canStart: Task { await startStack() }
+		case .unavailable: break
+		}
+	}
+
+	public var selectedProcess: ProcessState? {
+		selection.flatMap { statesByName[$0] }
 	}
 
 	public var processes: [ProcessState] {
@@ -59,10 +67,6 @@ public final class StackViewModel {
 				? left.name < right.name
 				: left.namespace < right.namespace
 		}
-	}
-
-	public func processes(in namespace: String) -> [ProcessState] {
-		processes.filter { $0.namespace == namespace }
 	}
 
 	public var groups: [ProjectGroup] {
@@ -82,14 +86,11 @@ public final class StackViewModel {
 		)
 	}
 
-	public func kind(of state: ProcessState) -> ProcessKind {
-		ProcessKind.of(state: state, configuration: configurations[state.name])
-	}
-
 	public var usage: ResourceUsage {
 		ResourceUsage.total(of: processes)
 	}
 
+	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
 	private var configurations: [String: ProcessConfiguration] = [:]
 
@@ -105,21 +106,11 @@ public final class StackViewModel {
 		self.retryDelay = retryDelay
 	}
 
-	public func connect() {
+	private func connect() {
 		streamTask?.cancel()
-		streamTask = Task { [weak self] in
-			while !Task.isCancelled {
-				guard let self else { return }
-				await self.observe()
-				guard !Task.isCancelled else { return }
-				try? await Task.sleep(for: self.retryDelay)
-			}
+		streamTask = Reconnecting.loop(every: retryDelay) { [weak self] in
+			await self?.observe()
 		}
-	}
-
-	public func disconnect() {
-		streamTask?.cancel()
-		streamTask = nil
 	}
 
 	/// Points the view model at a different server and starts over.
@@ -134,6 +125,16 @@ public final class StackViewModel {
 
 	public func isBusy(_ name: String?) -> Bool {
 		name.map(busy.contains) ?? false
+	}
+
+	public func canStart(_ name: String?) -> Bool {
+		guard let name, let state = statesByName[name] else { return false }
+		return state.canStart && !busy.contains(name)
+	}
+
+	public func canStop(_ name: String?) -> Bool {
+		guard let name, let state = statesByName[name] else { return false }
+		return state.canStop && !busy.contains(name)
 	}
 
 	public func startProcess(_ name: String) async {
@@ -213,8 +214,11 @@ public final class StackViewModel {
 		do {
 			let snapshot = try await client.processes()
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
-			project = try? await client.projectState()
-			configurations = await loadConfigurations(for: snapshot.map(\.name))
+
+			async let state = try? await client.projectState()
+			async let loaded = loadConfigurations(for: snapshot.map(\.name))
+			project = await state
+			configurations = await loaded
 			reconcileSelection()
 			connection = .connected
 

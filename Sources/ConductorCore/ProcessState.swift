@@ -1,6 +1,6 @@
 import Foundation
 
-public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
+public struct ProcessState: Decodable, Sendable, Identifiable, Hashable {
 	public var id: String { name }
 
 	public let name: String
@@ -10,7 +10,6 @@ public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
 	public let hasReadinessProbe: Bool
 	public let restarts: Int
 	public let exitCode: Int
-	public let pid: Int
 	public let memoryBytes: Int64
 	public let cpuPercent: Double
 	public let isRunning: Bool
@@ -30,7 +29,6 @@ public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
 		hasReadinessProbe: Bool = false,
 		restarts: Int = 0,
 		exitCode: Int = 0,
-		pid: Int = 0,
 		memoryBytes: Int64 = 0,
 		cpuPercent: Double = 0,
 		isRunning: Bool = false,
@@ -45,7 +43,6 @@ public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
 		self.hasReadinessProbe = hasReadinessProbe
 		self.restarts = restarts
 		self.exitCode = exitCode
-		self.pid = pid
 		self.memoryBytes = memoryBytes
 		self.cpuPercent = cpuPercent
 		self.isRunning = isRunning
@@ -55,7 +52,7 @@ public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
 	}
 
 	enum CodingKeys: String, CodingKey {
-		case name, namespace, status, restarts, pid, mem, cpu, age
+		case name, namespace, status, restarts, mem, cpu, age
 		case readiness = "is_ready"
 		case hasReadinessProbe = "has_ready_probe"
 		case exitCode = "exit_code"
@@ -73,7 +70,6 @@ public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
 		hasReadinessProbe = try c.decodeIfPresent(Bool.self, forKey: .hasReadinessProbe) ?? false
 		restarts = try c.decodeIfPresent(Int.self, forKey: .restarts) ?? 0
 		exitCode = try c.decodeIfPresent(Int.self, forKey: .exitCode) ?? 0
-		pid = try c.decodeIfPresent(Int.self, forKey: .pid) ?? 0
 		memoryBytes = try c.decodeIfPresent(Int64.self, forKey: .mem) ?? 0
 		cpuPercent = try c.decodeIfPresent(Double.self, forKey: .cpu) ?? 0
 		// The state socket announces a restarted process as Running while its is_running
@@ -92,24 +88,6 @@ public struct ProcessState: Codable, Sendable, Identifiable, Hashable {
 		}
 		let many = try c.decodeIfPresent([String].self, forKey: .namespace) ?? []
 		return many.first ?? "default"
-	}
-
-	public func encode(to encoder: any Encoder) throws {
-		var c = encoder.container(keyedBy: CodingKeys.self)
-		try c.encode(name, forKey: .name)
-		try c.encode(namespace, forKey: .namespace)
-		try c.encode(status.rawValue, forKey: .status)
-		try c.encode(readiness, forKey: .readiness)
-		try c.encode(hasReadinessProbe, forKey: .hasReadinessProbe)
-		try c.encode(restarts, forKey: .restarts)
-		try c.encode(exitCode, forKey: .exitCode)
-		try c.encode(pid, forKey: .pid)
-		try c.encode(memoryBytes, forKey: .mem)
-		try c.encode(cpuPercent, forKey: .cpu)
-		try c.encode(isRunning, forKey: .isRunning)
-		try c.encode(isWatched, forKey: .isWatched)
-		try c.encodeIfPresent(watchTriggerPath, forKey: .watchTriggerPath)
-		try c.encode(ageNanoseconds, forKey: .age)
 	}
 }
 
@@ -198,50 +176,37 @@ extension ProcessState {
 	public var canStop: Bool { isRunning }
 }
 
-public struct ProcessStateEvent: Codable, Sendable {
-	public let snapshot: Bool
+public struct ProcessStateEvent: Decodable, Sendable {
 	public let state: ProcessState
 
-	public init(snapshot: Bool, state: ProcessState) {
-		self.snapshot = snapshot
+	public init(state: ProcessState) {
 		self.state = state
-	}
-
-	enum CodingKeys: String, CodingKey { case snapshot, state }
-
-	public init(from decoder: any Decoder) throws {
-		let c = try decoder.container(keyedBy: CodingKeys.self)
-		snapshot = try c.decodeIfPresent(Bool.self, forKey: .snapshot) ?? false
-		state = try c.decode(ProcessState.self, forKey: .state)
 	}
 }
 
-public struct ProjectState: Codable, Sendable, Hashable {
+public struct ProjectState: Decodable, Sendable, Hashable {
 	public let projectName: String
 	public let version: String
 	public let processNum: Int
 	public let runningProcessNum: Int
 	public let upTimeNanoseconds: Int64
-	public let fileNames: [String]
 
 	public init(
 		projectName: String,
 		version: String,
 		processNum: Int,
 		runningProcessNum: Int,
-		upTimeNanoseconds: Int64,
-		fileNames: [String]
+		upTimeNanoseconds: Int64
 	) {
 		self.projectName = projectName
 		self.version = version
 		self.processNum = processNum
 		self.runningProcessNum = runningProcessNum
 		self.upTimeNanoseconds = upTimeNanoseconds
-		self.fileNames = fileNames
 	}
 
 	enum CodingKeys: String, CodingKey {
-		case projectName, version, processNum, runningProcessNum, fileNames
+		case projectName, version, processNum, runningProcessNum
 		case upTimeNanoseconds = "upTime"
 	}
 

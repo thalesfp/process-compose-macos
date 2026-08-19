@@ -10,7 +10,7 @@ struct LogPane: View {
 		VStack(spacing: 0) {
 			header
 			Divider()
-			body(for: model.selected)
+			output
 		}
 	}
 
@@ -60,8 +60,8 @@ struct LogPane: View {
 	}
 
 	@ViewBuilder
-	private func body(for selected: String?) -> some View {
-		if selected == nil {
+	private var output: some View {
+		if model.selected == nil {
 			Text("Select a process to read its output")
 				.font(.callout)
 				.foregroundStyle(.secondary)

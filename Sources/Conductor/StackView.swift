@@ -25,14 +25,9 @@ struct StackView: View {
 		.navigationTitle(model.project?.projectName ?? "Conductor")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
-		.task {
-			logModel.maxLines = bufferLines
-			logModel.backfill = backfill
-			reconnect()
-		}
-		.onChange(of: address) { _, _ in reconnect() }
-		.onChange(of: bufferLines) { _, lines in logModel.maxLines = lines }
-		.onChange(of: backfill) { _, lines in logModel.backfill = lines }
+		.onChange(of: bufferLines, initial: true) { _, lines in logModel.maxLines = lines }
+		.onChange(of: backfill, initial: true) { _, lines in logModel.backfill = lines }
+		.onChange(of: address, initial: true) { _, _ in reconnect() }
 		.onChange(of: model.selection) { _, name in logModel.select(name) }
 		.confirmationDialog(
 			"Stop every running process?",
@@ -79,15 +74,9 @@ struct StackView: View {
 				.controlSize(.small)
 				.accessibilityLabel("Working on the stack")
 		} else {
-			Button(powerTitle, systemImage: "power") {
-				if model.power == .canStop {
-					model.isConfirmingStopStack = true
-				} else {
-					Task { await model.startStack() }
-				}
-			}
+			Button(powerTitle, systemImage: "power") { model.togglePower() }
 			.labelStyle(.titleAndIcon)
-			.disabled(!isConnected || model.power == .unavailable)
+			.disabled(!model.canChangePower)
 			.help(model.power == .canStop ? "Stop every running process" : "Start every process the stack defines")
 		}
 	}
@@ -114,26 +103,7 @@ struct StackView: View {
 				ForEach(model.sections) { section in
 					Section {
 						ForEach(section.processes) { state in
-							ProcessRow(
-								state: state,
-								kind: section.kind,
-								isBusy: model.busy.contains(state.name),
-								start: { Task { await model.startProcess(state.name) } },
-								stop: { Task { await model.stopProcess(state.name) } },
-								restart: { Task { await model.restartProcess(state.name) } }
-							)
-							.tag(state.name)
-							.contextMenu {
-								Button("Start") { Task { await model.startProcess(state.name) } }
-									.disabled(!state.canStart)
-								Button("Restart") { Task { await model.restartProcess(state.name) } }
-									.disabled(!state.canStop)
-								Button("Stop") { Task { await model.stopProcess(state.name) } }
-									.disabled(!state.canStop)
-								Divider()
-								Button("Show Log") { model.selection = state.name }
-								Button("Copy Name") { copy(state.name) }
-							}
+							row(for: state, kind: section.kind)
 						}
 					} header: {
 						sectionHeader(for: section)
@@ -146,6 +116,36 @@ struct StackView: View {
 
 	/// Project, namespace and role, each shown only where it changes, so the reader
 	/// sees four levels without four repeated lines on every section.
+	/// The row and its context menu share one set of actions, so the two can never
+	/// offer different things for the same process.
+	private func row(for state: ProcessState, kind: ProcessKind) -> some View {
+		let name = state.name
+		let start: () -> Void = { Task { await model.startProcess(name) } }
+		let stop: () -> Void = { Task { await model.stopProcess(name) } }
+		let restart: () -> Void = { Task { await model.restartProcess(name) } }
+
+		return ProcessRow(
+			state: state,
+			kind: kind,
+			isBusy: model.isBusy(name),
+			start: start,
+			stop: stop,
+			restart: restart
+		)
+		.tag(name)
+		.contextMenu {
+			Button("Start", action: start)
+				.disabled(!model.canStart(name))
+			Button("Restart", action: restart)
+				.disabled(!model.canStop(name))
+			Button("Stop", action: stop)
+				.disabled(!model.canStop(name))
+			Divider()
+			Button("Show Log") { model.selection = name }
+			Button("Copy Name") { NSPasteboard.copy(name) }
+		}
+	}
+
 	private func sectionHeader(for section: StackSection) -> some View {
 		// A pinned header only reserves the height of its content, so the breathing room
 		// goes on the labels themselves. Padding the container makes it cover the first row.
@@ -207,9 +207,12 @@ struct StackView: View {
 	/// Totals across every running process. A second `.status` toolbar item would be
 	/// collapsed into the overflow menu, so this lives inside the connection item.
 	private var usageReadout: some View {
-		HStack(spacing: 12) {
-			Label(model.usage.cpuLabel, systemImage: "cpu")
-			Label(model.usage.memoryLabel, systemImage: "memorychip")
+		let cpu = model.usage.cpuLabel
+		let memory = model.usage.memoryLabel
+
+		return HStack(spacing: 12) {
+			Label(cpu, systemImage: "cpu")
+			Label(memory, systemImage: "memorychip")
 		}
 		.labelStyle(.titleAndIcon)
 		.font(.callout.monospacedDigit())
@@ -217,7 +220,7 @@ struct StackView: View {
 		.fixedSize()
 		.accessibilityElement(children: .ignore)
 		.accessibilityLabel(
-			"The stack is using \(model.usage.cpuLabel) processor and \(model.usage.memoryLabel) memory"
+			"The stack is using \(cpu) processor and \(memory) memory"
 		)
 		.help("Total across every running process")
 	}
@@ -239,10 +242,5 @@ struct StackView: View {
 		let client = LiveProcessComposeClient(address: address)
 		model.use(client)
 		logModel.use(client)
-	}
-
-	private func copy(_ text: String) {
-		NSPasteboard.general.clearContents()
-		NSPasteboard.general.setString(text, forType: .string)
 	}
 }

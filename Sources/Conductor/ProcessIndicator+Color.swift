@@ -45,9 +45,3 @@ struct StatusDot: View {
 		RoundedRectangle(cornerRadius: 2)
 	}
 }
-
-extension Duration {
-	var compactLabel: String {
-		formatted(.units(allowed: [.days, .hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2))
-	}
-}

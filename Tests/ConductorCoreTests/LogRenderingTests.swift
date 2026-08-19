@@ -68,6 +68,6 @@ struct LogRenderingTests {
 	}
 
 	private func line(_ id: Int, _ text: String) -> LogLine {
-		LogLine(id: id, processName: "api", spans: [AnsiSpan(text: text)])
+		LogLine(id: id, spans: [AnsiSpan(text: text)])
 	}
 }

@@ -91,6 +91,7 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 		query: [URLQueryItem]
 	) -> AsyncThrowingStream<Frame, any Error> {
 		let task = session.webSocketTask(with: address.url(path: path, scheme: "ws", query: query))
+		let decoder = JSONDecoder()
 
 		return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(4096)) { continuation in
 			// URLSessionWebSocketTask delivers one message per receive call, so the
@@ -99,7 +100,7 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 				task.receive { result in
 					switch result {
 					case .success(let message):
-						if let frame: Frame = Self.decode(message) {
+						if let frame: Frame = Self.decode(message, using: decoder) {
 							continuation.yield(frame)
 						}
 						receiveNext()
@@ -116,7 +117,10 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 		}
 	}
 
-	private static func decode<Frame: Decodable>(_ message: URLSessionWebSocketTask.Message) -> Frame? {
+	private static func decode<Frame: Decodable>(
+		_ message: URLSessionWebSocketTask.Message,
+		using decoder: JSONDecoder
+	) -> Frame? {
 		let payload: Data? = switch message {
 		case .data(let data): data
 		case .string(let text): text.data(using: .utf8)
@@ -125,7 +129,7 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 
 		guard let payload else { return nil }
 
-		return try? JSONDecoder().decode(Frame.self, from: payload)
+		return try? decoder.decode(Frame.self, from: payload)
 	}
 
 	private func escaped(_ name: String) -> String {

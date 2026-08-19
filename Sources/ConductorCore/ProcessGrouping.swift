@@ -16,8 +16,6 @@ public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 		case workingDir, watch, restartPolicy
 	}
 
-	private struct Present: Decodable {}
-
 	private struct RestartPolicy: Decodable {
 		let restart: Int?
 	}
@@ -25,8 +23,7 @@ public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 	public init(from decoder: any Decoder) throws {
 		let c = try decoder.container(keyedBy: CodingKeys.self)
 		workingDir = try c.decodeIfPresent(String.self, forKey: .workingDir)
-		hasWatcher = (try? c.decodeIfPresent(Present.self, forKey: .watch)) != nil
-			&& c.contains(.watch)
+		hasWatcher = c.contains(.watch)
 		// The server encodes the policy as an enum ordinal, and omits it entirely
 		// for the default, so any value at all means the process is kept alive.
 		let policy = try c.decodeIfPresent(RestartPolicy.self, forKey: .restartPolicy)

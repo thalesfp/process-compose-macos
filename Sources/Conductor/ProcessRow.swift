@@ -61,7 +61,7 @@ struct ProcessRow: View {
 					.help("\(state.restarts) restarts")
 					.accessibilityLabel("\(state.restarts) restarts")
 			}
-			if case .completed = state.status, state.exitCode != 0 {
+			if kind != .task, state.hasRun, state.exitCode != 0 {
 				Text("exit \(state.exitCode)")
 					.font(.caption)
 					.foregroundStyle(.red)
@@ -71,35 +71,40 @@ struct ProcessRow: View {
 		.frame(width: 130, alignment: .leading)
 	}
 
-	/// One saturated core. Above this the figure stops being background noise.
-	private static let busyCPUPercent: Double = 90
+	private static let metricsWidth: Double = 190
 
-	@ViewBuilder
+	/// The empty case still reserves the column, so the row's other columns stay aligned.
 	private var metrics: some View {
-		if kind == .task {
-			taskMetrics
-		} else if state.isRunning {
-			HStack(spacing: 10) {
-				Text(state.age.compactLabel)
-				Text(state.cpuLabel)
-					.foregroundStyle(state.cpuPercent >= Self.busyCPUPercent ? Color.orange : Color.secondary)
-				Text(state.memoryLabel)
+		Group {
+			if kind == .task {
+				taskFacts
+			} else if state.isRunning {
+				serviceFacts
 			}
-			.font(.caption.monospacedDigit())
-			.foregroundStyle(.secondary)
-			.frame(width: 190, alignment: .trailing)
-			.accessibilityLabel(
-				"Up \(state.age.compactLabel), \(state.cpuLabel) processor, \(state.memoryLabel) memory"
-			)
-		} else {
-			Color.clear.frame(width: 190, height: 1)
 		}
+		.font(.caption.monospacedDigit())
+		.foregroundStyle(.secondary)
+		.frame(width: Self.metricsWidth, alignment: .trailing)
 	}
 
-	/// Uptime, CPU and memory describe something that is meant to stay up. A task's
-	/// facts are what it last did and what set it off.
+	/// Uptime, CPU and memory describe something that is meant to stay up.
+	private var serviceFacts: some View {
+		let age = state.age.compactLabel
+		let cpu = state.cpuLabel
+		let memory = state.memoryLabel
+
+		return HStack(spacing: 10) {
+			Text(age)
+			Text(cpu)
+				.foregroundStyle(state.isCPUSaturated ? Color.orange : Color.secondary)
+			Text(memory)
+		}
+		.accessibilityLabel("Up \(age), \(cpu) processor, \(memory) memory")
+	}
+
+	/// A task's facts are what it last did and what set it off.
 	@ViewBuilder
-	private var taskMetrics: some View {
+	private var taskFacts: some View {
 		HStack(spacing: 10) {
 			if let trigger = state.watchTriggerPath {
 				Text(trigger)
@@ -112,9 +117,6 @@ struct ProcessRow: View {
 					.foregroundStyle(state.exitCode == 0 ? Color.secondary : Color.red)
 			}
 		}
-		.font(.caption.monospacedDigit())
-		.foregroundStyle(.secondary)
-		.frame(width: 190, alignment: .trailing)
 	}
 
 	@ViewBuilder

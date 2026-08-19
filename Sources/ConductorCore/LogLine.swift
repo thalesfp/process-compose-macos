@@ -1,7 +1,7 @@
 import Foundation
 
 /// One frame from the log socket.
-public struct LogMessage: Codable, Sendable, Hashable {
+public struct LogMessage: Decodable, Sendable, Hashable {
 	public let message: String
 	public let processName: String
 
@@ -19,12 +19,10 @@ public struct LogMessage: Codable, Sendable, Hashable {
 /// A buffered line, carrying an identity the log view can diff on.
 public struct LogLine: Sendable, Hashable, Identifiable {
 	public let id: Int
-	public let processName: String
 	public let spans: [AnsiSpan]
 
-	public init(id: Int, processName: String, spans: [AnsiSpan]) {
+	public init(id: Int, spans: [AnsiSpan]) {
 		self.id = id
-		self.processName = processName
 		self.spans = spans
 	}
 

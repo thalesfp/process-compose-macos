@@ -36,7 +36,7 @@ public enum LogRendering {
 		let dropLeading = rendered.prefix { $0 < oldest }.count
 		let kept = rendered.dropFirst(dropLeading)
 
-		guard kept.elementsEqual(lines.prefix(kept.count).map(\.id)) else {
+		guard kept.elementsEqual(lines.prefix(kept.count), by: { $0 == $1.id }) else {
 			return LogRenderPlan(dropLeading: rendered.count, append: lines)
 		}
 

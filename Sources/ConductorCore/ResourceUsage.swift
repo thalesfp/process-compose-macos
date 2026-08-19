@@ -44,4 +44,13 @@ extension ResourceUsage {
 extension ProcessState {
 	public var cpuLabel: String { ResourceFormat.cpu(cpuPercent) }
 	public var memoryLabel: String { ResourceFormat.memory(memoryBytes) }
+
+	/// One saturated core. Below this the figure is background noise.
+	public var isCPUSaturated: Bool { cpuPercent >= 90 }
+}
+
+extension Duration {
+	public var compactLabel: String {
+		formatted(.units(allowed: [.days, .hours, .minutes, .seconds], width: .narrow, maximumUnitCount: 2))
+	}
 }

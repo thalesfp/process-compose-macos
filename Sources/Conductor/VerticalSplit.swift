@@ -9,8 +9,15 @@ struct VerticalSplit<Top: View, Bottom: View>: View {
 	@ViewBuilder let top: () -> Top
 	@ViewBuilder let bottom: () -> Bottom
 
-	@AppStorage(PreferenceKey.splitFraction) private var fraction = PreferenceDefault.splitFraction
-	@State private var fractionAtDragStart: Double?
+	@AppStorage(PreferenceKey.splitFraction) private var storedFraction = PreferenceDefault.splitFraction
+
+	/// The divider follows the pointer from `@State`, so a drag is not one UserDefaults
+	/// write per tick. The stored value is updated once the drag ends.
+	@State private var drag: (start: Double, current: Double)?
+
+	private var fraction: Double {
+		drag?.current ?? storedFraction
+	}
 
 	var body: some View {
 		GeometryReader { proxy in
@@ -48,17 +55,22 @@ struct VerticalSplit<Top: View, Bottom: View>: View {
 		.gesture(
 			DragGesture(coordinateSpace: .global)
 				.onChanged { value in
-					let start = fractionAtDragStart ?? fraction
-					fractionAtDragStart = start
-					fraction = SplitLayout.fraction(
-						startFraction: start,
-						translation: value.translation.height,
-						total: total,
-						minTop: minTopHeight,
-						minBottom: minBottomHeight
+					let start = drag?.start ?? storedFraction
+					drag = (
+						start,
+						SplitLayout.fraction(
+							startFraction: start,
+							translation: value.translation.height,
+							total: total,
+							minTop: minTopHeight,
+							minBottom: minBottomHeight
+						)
 					)
 				}
-				.onEnded { _ in fractionAtDragStart = nil }
+				.onEnded { _ in
+					if let drag { storedFraction = drag.current }
+					drag = nil
+				}
 		)
 		.accessibilityLabel("Resize the log pane")
 	}

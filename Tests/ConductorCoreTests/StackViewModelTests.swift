@@ -17,7 +17,6 @@ struct StackViewModelTests {
 		await viewModel.observe()
 
 		#expect(viewModel.processes.map(\.name) == ["chatbot", "api"])
-		#expect(viewModel.namespaces == ["ai", "api"])
 	}
 
 	@Test("groups processes by the repo each one runs in")
@@ -45,7 +44,6 @@ struct StackViewModelTests {
 
 		let session = Task { await viewModel.observe() }
 		client.emit(.init(
-			snapshot: false,
 			state: .init(name: "relay", namespace: "relay", status: .running, isRunning: true)
 		))
 		client.finishStream()
@@ -74,7 +72,7 @@ struct StackViewModelTests {
 		await viewModel.startProcess("relay")
 
 		#expect(viewModel.lastError == "relay: no such process: relay")
-		#expect(viewModel.busy.isEmpty)
+		#expect(!viewModel.isBusy("relay"))
 	}
 
 	@Test("clears the previous error once an action succeeds")
@@ -228,6 +226,45 @@ struct StackViewModelTests {
 		#expect(viewModel.power == .canStop)
 	}
 
+	@Test("refuses to power the stack while the server is unreachable")
+	func refusesPowerWhenDisconnected() async {
+		let client = StubClient(loadFailure: ProcessComposeError.unreachable(port: 28080))
+		let viewModel = StackViewModel(client: client)
+
+		await viewModel.observe()
+
+		#expect(!viewModel.canChangePower)
+	}
+
+	@Test("offers no action for a process it does not know")
+	func offersNoActionForUnknownProcess() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(!viewModel.canStart("ghost"))
+		#expect(!viewModel.canStop(nil))
+	}
+
+	@Test("offers start for a stopped process and stop for a running one")
+	func offersTheActionThatFitsTheProcess() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .pending),
+		])
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.canStop("api"))
+		#expect(!viewModel.canStart("api"))
+		#expect(viewModel.canStart("worker"))
+		#expect(!viewModel.canStop("worker"))
+	}
+
 	@Test("offers nothing when no processes are known")
 	func offersNothingWhenDisconnected() async {
 		let client = StubClient(loadFailure: ProcessComposeError.unreachable(port: 28080))
@@ -341,8 +378,7 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 			version: "v1.122.0",
 			processNum: 0,
 			runningProcessNum: 0,
-			upTimeNanoseconds: 0,
-			fileNames: []
+			upTimeNanoseconds: 0
 		)
 	}
 
