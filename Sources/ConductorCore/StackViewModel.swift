@@ -86,6 +86,24 @@ public final class StackViewModel {
 		)
 	}
 
+	/// The server reports these once per connection, but processes start and stop between
+	/// connections, so the counts come from the live states instead.
+	public var runningCount: Int { runningProcesses.count }
+	public var processCount: Int { processes.count }
+
+	/// Uptime keeps advancing after the snapshot that carried it. Time passing changes
+	/// nothing observable on its own, so a ticker republishes this once a second.
+	public private(set) var uptime: Duration?
+
+	@MainActor
+	func refreshUptime() {
+		guard let project, let projectReadAt else {
+			uptime = nil
+			return
+		}
+		uptime = project.upTime + .seconds(now().timeIntervalSince(projectReadAt))
+	}
+
 	public var usage: ResourceUsage {
 		ResourceUsage.total(of: processes)
 	}
@@ -99,22 +117,54 @@ public final class StackViewModel {
 	}
 	private var client: any ProcessComposeClient
 	private let retryDelay: Duration
+	private let now: () -> Date
+	private var projectReadAt: Date?
+	private var generation = 0
 	private var streamTask: Task<Void, Never>?
+	private var clockTask: Task<Void, Never>?
 
-	public init(client: any ProcessComposeClient, retryDelay: Duration = .seconds(2)) {
+	public init(
+		client: any ProcessComposeClient,
+		retryDelay: Duration = .seconds(2),
+		now: @escaping () -> Date = Date.init
+	) {
 		self.client = client
 		self.retryDelay = retryDelay
+		self.now = now
 	}
 
 	private func connect() {
+		let mine = generation
+
+		clockTask?.cancel()
+		clockTask = Reconnecting.loop(every: .seconds(1)) { [weak self] in
+			await self?.refreshUptime()
+		}
+
 		streamTask?.cancel()
 		streamTask = Reconnecting.loop(every: retryDelay) { [weak self] in
-			await self?.observe()
+			await self?.observe(mine)
 		}
+	}
+
+	/// There is no server to talk to until Settings is corrected, so nothing is started
+	/// and the window says why.
+	public func refuseAddress(_ reason: String) {
+		generation += 1
+		streamTask?.cancel()
+		streamTask = nil
+		clockTask?.cancel()
+		clockTask = nil
+		statesByName = [:]
+		project = nil
+		uptime = nil
+		selection = nil
+		connection = .disconnected(reason: reason)
 	}
 
 	/// Points the view model at a different server and starts over.
 	public func use(_ client: any ProcessComposeClient) {
+		generation += 1
 		self.client = client
 		connection = .connecting
 		statesByName = [:]
@@ -211,27 +261,52 @@ public final class StackViewModel {
 	/// One connection attempt: load the authoritative list, then follow the event
 	/// stream until it ends. `connect()` is this in a retry loop.
 	public func observe() async {
+		await observe(generation)
+	}
+
+	/// Only `use` and `refuseAddress` advance the generation. An observation that starts
+	/// late must not claim to be the newest, or it would retire the connection that
+	/// replaced it.
+	private func observe(_ mine: Int) async {
 		do {
 			let snapshot = try await client.processes()
+			guard isCurrent(mine) else { return }
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
 
 			async let state = try? await client.projectState()
 			async let loaded = loadConfigurations(for: snapshot.map(\.name))
-			project = await state
-			configurations = await loaded
+			let loadedProject = await state
+			let loadedConfigurations = await loaded
+			guard isCurrent(mine) else { return }
+
+			project = loadedProject
+			projectReadAt = loadedProject == nil ? nil : now()
+			refreshUptime()
+			configurations = loadedConfigurations
 			reconcileSelection()
 			connection = .connected
 
 			for try await event in client.stateEvents() {
+				guard isCurrent(mine) else { return }
 				statesByName[event.state.name] = event.state
 			}
 
+			guard isCurrent(mine) else { return }
 			connection = .disconnected(reason: ProcessComposeError.streamClosed.localizedDescription)
 		} catch is CancellationError {
 			return
 		} catch {
+			guard isCurrent(mine) else { return }
 			connection = .disconnected(reason: error.localizedDescription)
 		}
+	}
+
+	/// Every await in `observe` is a point where the connection can be cancelled or
+	/// replaced. Cancellation ends a stream normally rather than throwing, and `try?`
+	/// swallows it outright, so an abandoned attempt would otherwise publish over the
+	/// connection that replaced it.
+	private func isCurrent(_ observation: Int) -> Bool {
+		!Task.isCancelled && observation == generation
 	}
 
 	/// Keeps the selection on a process the server still reports, so the log pane never

@@ -172,7 +172,14 @@ extension ProcessState {
 		}
 	}
 
-	public var canStart: Bool { !isRunning }
+	/// The server answers 400 "already running" for a process it has already scheduled,
+	/// so Pending, Restarting and Terminating are not offers Conductor can make.
+	public var canStart: Bool {
+		switch status {
+		case .running, .pending, .restarting, .terminating, .watching: false
+		case .completed, .skipped, .disabled, .error, .other: !isRunning
+		}
+	}
 	public var canStop: Bool { isRunning }
 }
 

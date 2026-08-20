@@ -117,7 +117,12 @@ struct StackViewModelTests {
 		])
 		replacement.finishStream()
 		viewModel.use(replacement)
-		await viewModel.observe()
+
+		// use() starts its own observation; driving one by hand as well would just
+		// supersede it, so wait for the one it started.
+		for _ in 0 ..< 1000 where viewModel.selection == "api" {
+			await Task.yield()
+		}
 
 		#expect(viewModel.selection == "web")
 	}
@@ -141,8 +146,8 @@ struct StackViewModelTests {
 	@Test("starts every process the stack defines")
 	func startsTheWholeStack() async {
 		let client = StubClient(processes: [
-			.init(name: "api", namespace: "api", status: .pending),
-			.init(name: "worker", namespace: "api", status: .pending),
+			.init(name: "api", namespace: "api", status: .completed),
+			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
 		client.finishStream()
@@ -157,7 +162,7 @@ struct StackViewModelTests {
 	@Test("leaves a process the config disabled switched off")
 	func skipsDisabledProcesses() async {
 		let client = StubClient(processes: [
-			.init(name: "api", namespace: "api", status: .pending),
+			.init(name: "api", namespace: "api", status: .completed),
 			.init(name: "houston-api", namespace: "houston", status: .disabled),
 		])
 		let viewModel = StackViewModel(client: client)
@@ -173,7 +178,7 @@ struct StackViewModelTests {
 	func stopsTheWholeStack() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
-			.init(name: "worker", namespace: "api", status: .pending),
+			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
 		client.finishStream()
@@ -187,8 +192,8 @@ struct StackViewModelTests {
 	@Test("names the processes that refused to start")
 	func reportsProcessesThatRefusedToStart() async {
 		let client = StubClient(processes: [
-			.init(name: "api", namespace: "api", status: .pending),
-			.init(name: "worker", namespace: "api", status: .pending),
+			.init(name: "api", namespace: "api", status: .completed),
+			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		client.refusingProcesses = ["worker"]
 		let viewModel = StackViewModel(client: client)
@@ -204,7 +209,7 @@ struct StackViewModelTests {
 	@Test("offers to start the stack when every process is stopped")
 	func offersToStartWhenIdle() async {
 		let client = StubClient(processes: [
-			.init(name: "api", namespace: "api", status: .pending),
+			.init(name: "api", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
 		client.finishStream()
@@ -217,7 +222,7 @@ struct StackViewModelTests {
 	func offersToStopWhileRunning() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
-			.init(name: "worker", namespace: "api", status: .pending),
+			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
 		client.finishStream()
@@ -253,7 +258,7 @@ struct StackViewModelTests {
 	func offersTheActionThatFitsTheProcess() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
-			.init(name: "worker", namespace: "api", status: .pending),
+			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
 		client.finishStream()
@@ -372,8 +377,13 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 		ProcessConfiguration(workingDir: workingDirs[name])
 	}
 
+	/// Lets a test hold a connection inside its setup phase.
+	nonisolated(unsafe) var beforeProjectState: (() async -> Void)?
+
 	func projectState() async throws -> ProjectState {
-		.init(
+		await beforeProjectState?()
+
+		return ProjectState(
 			projectName: "test",
 			version: "v1.122.0",
 			processNum: 0,

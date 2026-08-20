@@ -6,8 +6,26 @@ public struct ServerAddress: Sendable, Hashable {
 
 	// ./dev exports PC_PORT_NUM, defaulting to 28080 because the acme edge container holds 8080.
 	public static let defaultPort = 28080
+	public static let defaultHost = "localhost"
 
-	public init(host: String = "localhost", port: Int = ServerAddress.defaultPort) {
+	public static let standard = ServerAddress(checked: defaultHost, port: defaultPort)
+
+	// URLComponents traps when given a negative port, and yields no URL for a host
+	// containing whitespace. Settings lets the user type both, so an unusable address is
+	// refused here. Substituting a working one would point destructive actions at a
+	// server the user never asked for.
+	public init?(host: String, port: Int) {
+		let trimmed = host.trimmingCharacters(in: .whitespacesAndNewlines)
+
+		guard !trimmed.isEmpty,
+			!trimmed.contains(where: \.isWhitespace),
+			(1 ... 65535).contains(port)
+		else { return nil }
+
+		self.init(checked: trimmed, port: port)
+	}
+
+	private init(checked host: String, port: Int) {
 		self.host = host
 		self.port = port
 	}
@@ -16,7 +34,7 @@ public struct ServerAddress: Sendable, Hashable {
 		_ environment: [String: String] = ProcessInfo.processInfo.environment
 	) -> ServerAddress {
 		let raw = environment["PC_PORT_NUM"] ?? environment["DEV_STACK_PORT"] ?? ""
-		return ServerAddress(port: Int(raw) ?? defaultPort)
+		return ServerAddress(host: defaultHost, port: Int(raw) ?? defaultPort) ?? .standard
 	}
 
 	func url(path: String, scheme: String = "http", query: [URLQueryItem] = []) -> URL {
@@ -34,7 +52,7 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 	private let address: ServerAddress
 	private let session: URLSession
 
-	public init(address: ServerAddress = .init(), session: URLSession = .shared) {
+	public init(address: ServerAddress = .standard, session: URLSession = .shared) {
 		self.address = address
 		self.session = session
 	}
@@ -100,9 +118,11 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 				task.receive { result in
 					switch result {
 					case .success(let message):
-						if let frame: Frame = Self.decode(message, using: decoder) {
-							continuation.yield(frame)
+						guard let frame: Frame = Self.decode(message, using: decoder) else {
+							continuation.finish(throwing: ProcessComposeError.unreadableFrame)
+							return
 						}
+						continuation.yield(frame)
 						receiveNext()
 					case .failure(let error):
 						continuation.finish(throwing: error)

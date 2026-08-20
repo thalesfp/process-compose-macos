@@ -13,13 +13,19 @@ public final class LogViewModel {
 	public var isFollowing = true
 
 	/// How many lines the pane keeps. Lowering it drops the oldest lines at once.
+	/// Settings lets the user type any integer, so the value is clamped on the way in.
 	public var maxLines: Int {
-		didSet { trim() }
+		get { lineLimit }
+		set {
+			lineLimit = max(1, newValue)
+			trim()
+		}
 	}
 
 	/// How many lines the server replays when a stream opens.
 	public var backfill: Int
 
+	private var lineLimit: Int
 	private var client: any ProcessComposeClient
 	private let retryDelay: Duration
 	private var nextID = 0
@@ -32,7 +38,7 @@ public final class LogViewModel {
 		retryDelay: Duration = .seconds(2)
 	) {
 		self.client = client
-		self.maxLines = maxLines
+		self.lineLimit = max(1, maxLines)
 		self.backfill = backfill
 		self.retryDelay = retryDelay
 	}
@@ -105,7 +111,7 @@ public final class LogViewModel {
 	}
 
 	private func trim() {
-		guard lines.count > maxLines else { return }
-		lines.removeFirst(lines.count - maxLines)
+		guard lines.count > lineLimit else { return }
+		lines.removeFirst(lines.count - lineLimit)
 	}
 }

@@ -227,10 +227,12 @@ struct StackView: View {
 
 	private var subtitle: String {
 		guard let project = model.project else { return "Not connected" }
-		return "\(project.runningProcessNum) of \(project.processNum) running  ·  up \(project.upTime.compactLabel)  ·  \(project.version)"
+		let running = "\(model.runningCount) of \(model.processCount) running"
+		guard let uptime = model.uptime else { return "\(running)  ·  \(project.version)" }
+		return "\(running)  ·  up \(uptime.compactLabel)  ·  \(project.version)"
 	}
 
-	private var address: ServerAddress {
+	private var address: ServerAddress? {
 		ServerAddress(host: host, port: port)
 	}
 
@@ -239,6 +241,14 @@ struct StackView: View {
 	}
 
 	private func reconnect() {
+		guard let address else {
+			// The log pane keeps its own client, so releasing it is what stops Clear from
+			// truncating logs on the server the user just navigated away from.
+			model.refuseAddress("Settings has no usable server address for \(host):\(port)")
+			logModel.select(nil)
+			return
+		}
+
 		let client = LiveProcessComposeClient(address: address)
 		model.use(client)
 		logModel.use(client)
