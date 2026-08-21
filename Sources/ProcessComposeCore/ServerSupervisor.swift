@@ -41,6 +41,7 @@ public final class ServerSupervisor {
 	private let reachability: any ServerReachability
 	private let records: any ServerRecordStore
 	private let grace: Duration
+	private let owner: Int32
 
 	private var server: (any ServerProcess)?
 	private var watchTask: Task<Void, Never>?
@@ -53,13 +54,15 @@ public final class ServerSupervisor {
 		reachability: any ServerReachability = LiveServerReachability(),
 		records: any ServerRecordStore = FileServerRecordStore(),
 		log: ServerLog = ServerLog(),
-		grace: Duration = .seconds(5)
+		grace: Duration = .seconds(5),
+		owner: Int32 = ProcessInfo.processInfo.processIdentifier
 	) {
 		self.runner = runner
 		self.reachability = reachability
 		self.records = records
 		self.log = log
 		self.grace = grace
+		self.owner = owner
 	}
 
 	public var isOwned: Bool {
@@ -151,7 +154,13 @@ public final class ServerSupervisor {
 	/// The app is quitting, so the server it started goes with it. Quitting cannot await,
 	/// so this waits in place.
 	public func stopOnQuit() {
-		guard let server, server.isRunning else {
+		// A copy of the app that started nothing leaves the record for the copy that did.
+		guard let server else {
+			state = .idle
+			return
+		}
+
+		guard server.isRunning else {
 			release()
 			return
 		}
@@ -175,9 +184,17 @@ public final class ServerSupervisor {
 	}
 
 	private func attach(on address: ServerAddress) {
+		if let server, server.isRunning {
+			state = .running(owned: true)
+			return
+		}
+
 		guard
 			let record = records.load(),
 			record.port == address.port,
+			// A record whose app is still running belongs to that copy, and stopping its
+			// server would take the stack out from under it.
+			record.owner == owner || !runner.isRunning(pid: record.owner),
 			let existing = runner.adopt(pid: record.pid)
 		else {
 			state = .running(owned: false)
@@ -203,7 +220,7 @@ public final class ServerSupervisor {
 			let started = try runner.run(plan)
 
 			server = started
-			remember(ServerRecord(pid: started.pid, port: plan.port))
+			remember(ServerRecord(pid: started.pid, port: plan.port, owner: owner))
 			state = .running(owned: true)
 			watch(started)
 		} catch {

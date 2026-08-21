@@ -25,11 +25,14 @@ struct ServerSupervisorTests {
 		let runner = FakeRunner()
 		let orphan = FakeServerProcess(pid: 4242)
 		runner.adoptable[4242] = orphan
-		let records = MemoryRecordStore(record: ServerRecord(pid: 4242, port: ServerAddress.defaultPort))
+		let records = MemoryRecordStore(
+			record: ServerRecord(pid: 4242, port: ServerAddress.defaultPort, owner: 900)
+		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(true),
-			records: records
+			records: records,
+			owner: 901
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
@@ -42,6 +45,32 @@ struct ServerSupervisorTests {
 		#expect(records.record == nil)
 	}
 
+	@Test("leaves the server another copy of the app is running")
+	func leavesAnotherCopysServerAlone() async {
+		let runner = FakeRunner()
+		let orphan = FakeServerProcess(pid: 4242)
+		runner.adoptable[4242] = orphan
+		runner.livePIDs = [900]
+		let records = MemoryRecordStore(
+			record: ServerRecord(pid: 4242, port: ServerAddress.defaultPort, owner: 900)
+		)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: 901
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: false))
+
+		await supervisor.stop()
+
+		#expect(orphan.didTerminate == false)
+		#expect(records.record != nil)
+	}
+
 	@Test("starts the configured server when nothing answers the port")
 	func launchesWhenPortIsDead() async {
 		let runner = FakeRunner()
@@ -49,14 +78,15 @@ struct ServerSupervisorTests {
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(false),
-			records: records
+			records: records,
+			owner: 901
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
 
 		#expect(supervisor.state == .running(owned: true))
 		#expect(runner.launched == [.test])
-		#expect(records.record == ServerRecord(pid: 4242, port: 28080))
+		#expect(records.record == ServerRecord(pid: 4242, port: 28080, owner: 901))
 	}
 
 	@Test("stays put when no launch is configured")
@@ -196,6 +226,25 @@ struct ServerSupervisorTests {
 		#expect(runner.launched.isEmpty)
 	}
 
+	@Test("quitting a copy that started nothing leaves the record alone")
+	func quitKeepsAnotherCopysRecord() async {
+		let runner = FakeRunner()
+		runner.livePIDs = [900]
+		let record = ServerRecord(pid: 4242, port: ServerAddress.defaultPort, owner: 900)
+		let records = MemoryRecordStore(record: record)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: 901
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		supervisor.stopOnQuit()
+
+		#expect(records.record == record)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -262,6 +311,7 @@ private final class FakeRunner: ServerRunner {
 	var adoptable: [Int32: FakeServerProcess] = [:]
 	var failure: (any Error)?
 	var validation: ServerValidation = .valid
+	var livePIDs: Set<Int32> = []
 	var ignoresTerminate = false
 	private(set) var started: FakeServerProcess?
 
@@ -282,6 +332,10 @@ private final class FakeRunner: ServerRunner {
 
 	func adopt(pid: Int32) -> (any ServerProcess)? {
 		adoptable[pid]
+	}
+
+	func isRunning(pid: Int32) -> Bool {
+		livePIDs.contains(pid)
 	}
 }
 

@@ -1,14 +1,17 @@
 import Foundation
 
 /// The server the app started, kept on disk so a crash does not leave one running that
-/// nothing owns.
+/// nothing owns. `owner` is the app that started it, so a second copy of the app can tell
+/// a server it may take over from one another copy is still running.
 public struct ServerRecord: Codable, Sendable, Hashable {
 	public let pid: Int32
 	public let port: Int
+	public let owner: Int32
 
-	public init(pid: Int32, port: Int) {
+	public init(pid: Int32, port: Int, owner: Int32) {
 		self.pid = pid
 		self.port = port
+		self.owner = owner
 	}
 }
 

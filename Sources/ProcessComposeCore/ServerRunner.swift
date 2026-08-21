@@ -27,6 +27,7 @@ public protocol ServerRunner {
 	/// Takes back a server recorded by an earlier run, or nil when that pid is gone or
 	/// belongs to something else now.
 	func adopt(pid: Int32) -> (any ServerProcess)?
+	func isRunning(pid: Int32) -> Bool
 }
 
 public struct LiveServerRunner: ServerRunner {
@@ -62,6 +63,10 @@ public struct LiveServerRunner: ServerRunner {
 		guard output.1 != 0 else { return .valid }
 
 		return .failed(reason: ServerValidation.reason(in: output.0))
+	}
+
+	public func isRunning(pid: Int32) -> Bool {
+		UnixProcess.isAlive(pid)
 	}
 
 	public func adopt(pid: Int32) -> (any ServerProcess)? {
