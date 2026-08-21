@@ -55,11 +55,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		alert.addButton(withTitle: "Stop and Quit")
 		alert.addButton(withTitle: "Cancel")
 
-		guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+		guard let window = sender.mainWindow ?? sender.windows.first(where: \.isVisible) else {
+			guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
 
-		ProcessComposeApp.server.stopOnQuit()
+			ProcessComposeApp.server.stopOnQuit()
 
-		return .terminateNow
+			return .terminateNow
+		}
+
+		// A sheet drops from the window the stack belongs to, so the question arrives where
+		// the user was looking. It answers later, which is what `terminateLater` waits for.
+		alert.beginSheetModal(for: window) { response in
+			guard response == .alertFirstButtonReturn else {
+				sender.reply(toApplicationShouldTerminate: false)
+				return
+			}
+
+			ProcessComposeApp.server.stopOnQuit()
+			sender.reply(toApplicationShouldTerminate: true)
+		}
+
+		return .terminateLater
 	}
 
 	// A quit the delegate never sees, such as a log out, still has to take the server with it.
