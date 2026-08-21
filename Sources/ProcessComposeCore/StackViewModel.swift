@@ -318,13 +318,22 @@ public final class StackViewModel {
 			}
 
 			guard isCurrent(mine) else { return }
-			connection = .disconnected(reason: ProcessComposeError.streamClosed.localizedDescription)
+			disconnect(reason: ProcessComposeError.streamClosed.localizedDescription)
 		} catch is CancellationError {
 			return
 		} catch {
 			guard isCurrent(mine) else { return }
-			connection = .disconnected(reason: error.localizedDescription)
+			disconnect(reason: error.localizedDescription)
 		}
+	}
+
+	/// The project belongs to the server that reported it, so its name, version and uptime
+	/// go with the connection rather than ageing on screen.
+	private func disconnect(reason: String) {
+		project = nil
+		projectReadAt = nil
+		uptime = nil
+		connection = .disconnected(reason: reason)
 	}
 
 	/// Every await in `observe` is a point where the connection can be cancelled or
