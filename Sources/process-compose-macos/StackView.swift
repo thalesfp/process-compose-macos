@@ -201,6 +201,18 @@ struct StackView: View {
 		.help(help)
 	}
 
+	/// A server the app tried and failed to start says so here, since the empty state is
+	/// where the user is looking.
+	private var serverAdvice: String {
+		switch server.state {
+		case .failed(let reason): reason
+		case .unconfigured:
+			"Point Settings at a process-compose binary and config to start one from here, or run it yourself. The app reconnects on its own."
+		case .idle, .running:
+			"The app starts one when nothing answers the port, and reconnects on its own."
+		}
+	}
+
 	private var serverColor: Color {
 		switch server.state {
 		case .running: .green
@@ -263,12 +275,8 @@ struct StackView: View {
 				Label("No stack running", systemImage: "bolt.horizontal.circle")
 			} description: {
 				Text(reason)
-				Text(
-					server.state == .unconfigured
-						? "Point Settings at a process-compose binary and config to start one from here, or run it yourself. The app reconnects on its own."
-						: "The app starts one when nothing answers the port, and reconnects on its own."
-				)
-				.font(.callout)
+				Text(serverAdvice)
+					.font(.callout)
 			} actions: {
 				Button("Start Server") { Task { await server.start() } }
 					.disabled(!server.canStart)
