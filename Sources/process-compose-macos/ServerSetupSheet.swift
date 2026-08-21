@@ -11,6 +11,7 @@ struct ServerSetupSheet: View {
 
 	@Environment(\.dismiss) private var dismiss
 
+	@State private var draftBinary = ""
 	@State private var draftConfig = ""
 	@State private var draftWorkingDirectory = ""
 	@State private var validation: ServerValidation?
@@ -27,6 +28,10 @@ struct ServerSetupSheet: View {
 			}
 
 			Form {
+				LabeledContent("process-compose") {
+					choice(draftBinary, placeholder: "Not chosen") { chooseBinary() }
+				}
+
 				LabeledContent("Config") {
 					choice(draftConfig, placeholder: "Not chosen") { chooseConfig() }
 				}
@@ -64,6 +69,7 @@ struct ServerSetupSheet: View {
 		.padding(20)
 		.frame(width: 560)
 		.task {
+			draftBinary = binaryPath
 			draftConfig = configPath
 			draftWorkingDirectory = workingDirectory
 		}
@@ -93,11 +99,18 @@ struct ServerSetupSheet: View {
 
 	private var plan: ServerLaunchPlan? {
 		ServerLaunchPlan(
-			executablePath: binaryPath,
+			executablePath: draftBinary,
 			configurationPath: draftConfig,
 			workingDirectoryPath: draftWorkingDirectory,
 			port: port
 		)
+	}
+
+	private func chooseBinary() {
+		guard let chosen = FilePicker.choose("The process-compose binary, or a script that runs it", startingAt: draftBinary) else { return }
+
+		draftBinary = chosen
+		validation = nil
 	}
 
 	private func chooseConfig() {
@@ -133,6 +146,7 @@ struct ServerSetupSheet: View {
 	}
 
 	private func save() {
+		binaryPath = draftBinary
 		configPath = draftConfig
 		workingDirectory = draftWorkingDirectory
 		dismiss()
