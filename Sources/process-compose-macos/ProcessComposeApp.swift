@@ -45,6 +45,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		true
 	}
 
+	/// The stack goes down with the app, which is worth asking about first.
+	func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+		guard ProcessComposeApp.server.isOwned else { return .terminateNow }
+
+		let alert = NSAlert()
+		alert.messageText = "Stop the stack before quitting?"
+		alert.informativeText = "The app started this server. Quitting stops it and every process it is running."
+		alert.addButton(withTitle: "Stop and Quit")
+		alert.addButton(withTitle: "Cancel")
+
+		guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
+
+		ProcessComposeApp.server.stopOnQuit()
+
+		return .terminateNow
+	}
+
+	// A quit the delegate never sees, such as a log out, still has to take the server with it.
 	func applicationWillTerminate(_ notification: Notification) {
 		ProcessComposeApp.server.stopOnQuit()
 	}
