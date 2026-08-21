@@ -24,7 +24,23 @@ public struct LiveMCPServerProbe: MCPServerProbe {
 		guard let (bytes, response) = try? await session.bytes(for: request) else { return false }
 		bytes.task.cancel()
 
-		return (response as? HTTPURLResponse)?.statusCode == 200
+		guard let http = response as? HTTPURLResponse else { return false }
+
+		return Self.answersSSE(status: http.statusCode, contentType: http.value(forHTTPHeaderField: "Content-Type"))
+	}
+
+	// A server with SPA fallback routing answers 200 for any path, so the media type is
+	// what separates an MCP endpoint from an unrelated service on the same port.
+	static func answersSSE(status: Int, contentType: String?) -> Bool {
+		guard status == 200, let contentType else { return false }
+
+		// RFC 9110 puts optional parameters after a semicolon, so only the part before it
+		// names the media type.
+		let mediaType = contentType.prefix { $0 != ";" }
+			.trimmingCharacters(in: .whitespaces)
+			.lowercased()
+
+		return mediaType == "text/event-stream"
 	}
 }
 

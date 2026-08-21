@@ -62,6 +62,33 @@ struct MCPServerTests {
 	}
 }
 
+struct MCPProbeTests {
+	@Test("treats an event stream on the MCP port as an answering server")
+	func acceptsAnEventStream() {
+		#expect(LiveMCPServerProbe.answersSSE(status: 200, contentType: "text/event-stream; charset=utf-8"))
+	}
+
+	@Test("ignores a web page served on the MCP port")
+	func rejectsAWebPage() {
+		#expect(!LiveMCPServerProbe.answersSSE(status: 200, contentType: "text/html; charset=utf-8"))
+	}
+
+	@Test("ignores a media type that merely starts like an event stream")
+	func rejectsALookalikeMediaType() {
+		#expect(!LiveMCPServerProbe.answersSSE(status: 200, contentType: "text/event-streaming"))
+	}
+
+	@Test("ignores a response that names no media type")
+	func rejectsAMissingMediaType() {
+		#expect(!LiveMCPServerProbe.answersSSE(status: 200, contentType: nil))
+	}
+
+	@Test("ignores an event stream the server refused to serve")
+	func rejectsANonSuccessStatus() {
+		#expect(!LiveMCPServerProbe.answersSSE(status: 404, contentType: "text/event-stream"))
+	}
+}
+
 final class StubProbe: MCPServerProbe, @unchecked Sendable {
 	nonisolated(unsafe) var asked: [String] = []
 	private let reachable: Bool
