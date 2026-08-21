@@ -173,8 +173,8 @@ final class AdoptedServerProcess: ServerProcess {
 }
 
 extension ServerValidation {
-	/// process-compose reports the fault as its last log line, coloured and prefixed with
-	/// the level and a timestamp.
+	/// process-compose reports the fault as its last log line: coloured, prefixed with a
+	/// timestamp and a level, and carrying the detail in an `error="..."` field.
 	static func reason(in output: String) -> String {
 		let lines = output
 			.split(whereSeparator: \.isNewline)
@@ -183,7 +183,19 @@ extension ServerValidation {
 
 		guard let last = lines.last else { return "The config would not load" }
 
-		return last.trimmingCharacters(in: .whitespaces)
+		return message(in: last.trimmingCharacters(in: .whitespaces))
+	}
+
+	static func message(in line: String) -> String {
+		var text = Substring(line)
+
+		if let prefix = text.prefixMatch(of: /\d{2}-\d{2}-\d{2} [\d:.]+ [A-Z]{3}\s+/) {
+			text = text[prefix.range.upperBound...]
+		}
+
+		guard let detail = text.firstMatch(of: /\s*error="(.+)"\s*$/) else { return String(text) }
+
+		return text[..<detail.range.lowerBound] + ": " + detail.1
 	}
 }
 

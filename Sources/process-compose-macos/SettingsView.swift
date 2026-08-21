@@ -42,13 +42,12 @@ private struct ServerSettings: View {
 				PathField("Project config", path: $configPath)
 				PathField("Working directory", path: $workingDirectory, isDirectory: true)
 
-				LabeledContent("Config") {
-					HStack(spacing: 8) {
-						Button("Validate") { validate() }
-							.controlSize(.small)
-							.disabled(plan == nil || isValidating)
-						validationReadout
-					}
+				HStack(alignment: .firstTextBaseline, spacing: 10) {
+					Button("Validate") { validate() }
+						.controlSize(.small)
+						.disabled(plan == nil || isValidating)
+					validationReadout
+					Spacer(minLength: 0)
 				}
 			} footer: {
 				Text("With the binary and the config set, the app starts the server itself when nothing answers the port, and stops it again when the app quits. A server that is already running is left alone, and the app takes the config from it the first time it connects. Working directory is where process-compose runs, which is what a config's working_dir and watch paths are relative to; empty means the config's own directory.")
@@ -118,6 +117,7 @@ extension ServerSettings {
 			Label(reason, systemImage: "exclamationmark.triangle.fill")
 				.foregroundStyle(.orange)
 				.font(.caption)
+				.multilineTextAlignment(.leading)
 				.textSelection(.enabled)
 		case nil:
 			EmptyView()

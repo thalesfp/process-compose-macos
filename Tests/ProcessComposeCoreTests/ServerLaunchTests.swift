@@ -74,9 +74,15 @@ struct ServerLaunchTests {
 
 	@Test("reads the fault out of what process-compose printed")
 	func readsTheValidationFault() {
-		let output = "\u{1b}[90m26-08-21 14:27:23\u{1b}[0m \u{1b}[31mFTL\u{1b}[0m Failed to load project\n"
+		let output = """
+			\u{1b}[90m26-08-21 14:27:23.354\u{1b}[0m \u{1b}[31mFTL\u{1b}[0m \u{1b}[1mFailed to load project\u{1b}[0m error="watch path 'acme/v3' does not exist"
 
-		#expect(ServerValidation.reason(in: output) == "26-08-21 14:27:23 FTL Failed to load project")
+			"""
+
+		#expect(
+			ServerValidation.reason(in: output)
+				== "Failed to load project: watch path 'acme/v3' does not exist"
+		)
 	}
 
 	@Test("leaves a server built from several configs to the user")
