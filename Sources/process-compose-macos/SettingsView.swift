@@ -18,19 +18,47 @@ private struct ServerSettings: View {
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
 	@AppStorage(PreferenceKey.mcpPort) private var mcpPort = PreferenceDefault.mcpPort
 
+	@State private var draftHost = ""
+	@State private var draftPort = 0
+	@State private var draftMCPPort = 0
+
 	var body: some View {
 		Form {
 			Section {
-				TextField("Host", text: $host)
-				TextField("Port", value: $port, format: .number.grouping(.never))
-				TextField("MCP port", value: $mcpPort, format: .number.grouping(.never))
+				TextField("Host", text: $draftHost)
+				TextField("Port", value: $draftPort, format: .number.grouping(.never))
+				TextField("MCP port", value: $draftMCPPort, format: .number.grouping(.never))
+
+				HStack {
+					Spacer(minLength: 0)
+					Button("Apply") { apply() }
+						.disabled(!hasChanges)
+				}
 			} footer: {
-				Text("PC_PORT_NUM sets the port the first time the app runs. What you type here wins from then on. The MCP port is the one in the stack's mcp_server block; process-compose serves it at /sse.")
+				Text("PC_PORT_NUM sets the port the first time the app runs. What you apply here wins from then on. The MCP port is the one in the stack's mcp_server block; process-compose serves it at /sse.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}
 		}
 		.formStyle(.grouped)
+		.onSubmit { apply() }
+		.task {
+			draftHost = host
+			draftPort = port
+			draftMCPPort = mcpPort
+		}
+	}
+
+	private var hasChanges: Bool {
+		draftHost != host || draftPort != port || draftMCPPort != mcpPort
+	}
+
+	// A half-typed port names a different server, and pointing the app at one retires the
+	// server it started for the last, so these only take effect once they are asked for.
+	private func apply() {
+		host = draftHost
+		port = draftPort
+		mcpPort = draftMCPPort
 	}
 }
 

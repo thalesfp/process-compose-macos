@@ -1,0 +1,119 @@
+import Foundation
+import Testing
+
+@testable import ProcessComposeCore
+
+@MainActor
+struct ServerValidationTests {
+	@Test("gives up on a check that will not finish, and on what it started")
+	func boundsAHangingCheck() async throws {
+		let directory = FileManager.default.temporaryDirectory
+			.appendingPathComponent("check-\(UUID().uuidString)", isDirectory: true)
+		try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let script = directory.appendingPathComponent("hangs.sh")
+		let childFile = directory.appendingPathComponent("child.pid")
+
+		// bash passes its ignored TERM to what it starts, so the child outlives SIGTERM too.
+		try """
+			#!/bin/bash
+			trap '' TERM
+			sleep 30 &
+			echo $! > "$(dirname "$0")/child.pid"
+			wait
+			""".write(to: script, atomically: true, encoding: .utf8)
+		try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: script.path,
+				configurationPath: directory.appendingPathComponent("process-compose.yaml").path,
+				port: 28080
+			)
+		)
+		let runner = LiveServerRunner(validationTimeout: .seconds(1))
+
+		let started = ContinuousClock.now
+		let validation = await runner.validate(plan)
+		let waited = ContinuousClock.now - started
+
+		#expect(validation == .failed(reason: "The config check did not finish"))
+		#expect(waited < .seconds(10))
+
+		let child = try #require(pid_t(try await recordedChild(in: childFile)))
+
+		await until { kill(child, 0) != 0 }
+
+		#expect(kill(child, 0) != 0)
+	}
+
+	@Test("gives up on a check that goes quiet without exiting")
+	func boundsACheckThatClosesItsOutput() async throws {
+		let directory = FileManager.default.temporaryDirectory
+			.appendingPathComponent("quiet-check-\(UUID().uuidString)", isDirectory: true)
+		try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let script = directory.appendingPathComponent("quiet.sh")
+
+		// End of file on the pipe says every writer let go, not that the check is over.
+		try """
+			#!/bin/bash
+			exec 1>&- 2>&-
+			sleep 30
+			""".write(to: script, atomically: true, encoding: .utf8)
+		try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: script.path,
+				configurationPath: directory.appendingPathComponent("process-compose.yaml").path,
+				port: 28080
+			)
+		)
+		let runner = LiveServerRunner(validationTimeout: .seconds(1))
+		let answer = Answer()
+
+		let checking = Task { await answer.set(runner.validate(plan)) }
+		await until { answer.value != nil }
+		checking.cancel()
+
+		#expect(answer.value == .failed(reason: "The config check did not finish"))
+	}
+}
+
+/// Holds the answer so a check that never returns fails the test instead of hanging it.
+private final class Answer: @unchecked Sendable {
+	private let lock = NSLock()
+	private var answer: ServerValidation?
+
+	var value: ServerValidation? {
+		lock.lock()
+		defer { lock.unlock() }
+		return answer
+	}
+
+	func set(_ value: ServerValidation) {
+		lock.lock()
+		answer = value
+		lock.unlock()
+	}
+}
+
+/// The script records its child as it starts, which under load can be after the check that
+/// spawned it has already been given up on.
+private func recordedChild(in file: URL) async throws -> String {
+	await until { FileManager.default.fileExists(atPath: file.path) }
+
+	return try String(contentsOf: file, encoding: .utf8)
+		.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private func until(_ condition: @Sendable () -> Bool, within limit: Duration = .seconds(10)) async {
+	let deadline = ContinuousClock.now.advanced(by: limit)
+
+	while ContinuousClock.now < deadline, !condition() {
+		try? await Task.sleep(for: .milliseconds(50))
+	}
+}

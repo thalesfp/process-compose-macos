@@ -4,6 +4,8 @@ import Observation
 public enum ServerLifecycle: Sendable, Equatable {
 	/// Settings does not say what to start.
 	case unconfigured
+	/// Settings points at another machine, where the app cannot start anything.
+	case remote
 	case idle
 	case running(owned: Bool)
 	case failed(reason: String)
@@ -25,7 +27,17 @@ public struct LiveServerReachability: ServerReachability {
 		var request = URLRequest(url: address.url(path: "/project/state"))
 		request.timeoutInterval = 2
 
-		return (try? await session.data(for: request)) != nil
+		guard let (data, response) = try? await session.data(for: request) else { return false }
+
+		return Self.answers(status: (response as? HTTPURLResponse)?.statusCode, body: data)
+	}
+
+	// URLSession returns a 404 or a 500 as a success, and any service can hold the port, so
+	// the project the server reports is what separates it from something else answering.
+	static func answers(status: Int?, body: Data) -> Bool {
+		guard status == 200 else { return false }
+
+		return (try? JSONDecoder().decode(ProjectState.self, from: body)) != nil
 	}
 }
 
@@ -70,17 +82,21 @@ public final class ServerSupervisor {
 	}
 
 	public var canStart: Bool {
-		guard plan != nil else { return false }
+		guard plan != nil, address?.isLoopback == true else { return false }
 
 		switch state {
 		case .idle, .failed: return true
-		case .unconfigured, .running: return false
+		case .unconfigured, .remote, .running: return false
 		}
 	}
 
 	/// Points the supervisor at the server the rest of the app is talking to. A changed
 	/// address or plan retires the server started for the previous one.
 	public func use(address: ServerAddress?, plan: ServerLaunchPlan?) async {
+		// Stopping a server is the first thing this does, so a request already abandoned
+		// must not get that far.
+		guard !Task.isCancelled else { return }
+
 		if address != self.address || plan != self.plan {
 			await stop()
 		}
@@ -102,6 +118,11 @@ public final class ServerSupervisor {
 
 		if reachable {
 			attach(on: address)
+			return
+		}
+
+		guard address.isLoopback else {
+			state = .remote
 			return
 		}
 
@@ -190,6 +211,7 @@ public final class ServerSupervisor {
 		}
 
 		guard
+			address.isLoopback,
 			let record = records.load(),
 			record.port == address.port,
 			// A record whose app is still running belongs to that copy, and stopping its

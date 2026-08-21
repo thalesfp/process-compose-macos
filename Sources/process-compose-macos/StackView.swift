@@ -212,6 +212,8 @@ struct StackView: View {
 		case .failed(let reason): reason
 		case .unconfigured:
 			"Choose the config for this stack and the app starts it from here. It reconnects on its own if you run the stack yourself."
+		case .remote:
+			"The app only starts a server on this machine. Run the stack on \(host), or point Settings at localhost."
 		case .idle, .running:
 			"The app starts one when nothing answers the port, and reconnects on its own."
 		}
@@ -221,13 +223,14 @@ struct StackView: View {
 		switch server.state {
 		case .running: .green
 		case .failed: .orange
-		case .idle, .unconfigured: .secondary
+		case .idle, .unconfigured, .remote: .secondary
 		}
 	}
 
 	private var serverStatus: String {
 		switch server.state {
 		case .unconfigured: "Settings has no process-compose binary and config to start"
+		case .remote: "Settings points at \(host), so the app cannot start a server there"
 		case .idle: "No server started"
 		case .running(let owned): owned ? "Running the server this app started" : "Attached to a server started elsewhere"
 		case .failed(let reason): reason

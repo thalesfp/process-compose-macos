@@ -31,38 +31,85 @@ public protocol ServerRunner {
 }
 
 public struct LiveServerRunner: ServerRunner {
-	public init() {}
+	private let validationTimeout: Duration
+
+	public init(validationTimeout: Duration = .seconds(30)) {
+		self.validationTimeout = validationTimeout
+	}
 
 	public func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess {
 		try SpawnedServerProcess(plan)
 	}
 
 	public func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
-		let process = Process()
-		let pipe = Pipe()
-
-		process.executableURL = plan.executable
-		process.arguments = plan.validationArguments
-		process.currentDirectoryURL = plan.workingDirectory
-		process.environment = plan.environment(ProcessInfo.processInfo.environment)
-		process.standardOutput = pipe
-		process.standardError = pipe
-
+		let check: GroupedProcess
 		do {
-			try process.run()
+			check = try GroupedProcess.run(
+				executable: plan.executable,
+				arguments: plan.validationArguments,
+				workingDirectory: plan.workingDirectory,
+				environment: plan.environment(ProcessInfo.processInfo.environment)
+			)
 		} catch {
 			return .failed(reason: error.localizedDescription)
 		}
 
-		let output = await Task.detached {
-			let data = pipe.fileHandleForReading.readDataToEndOfFile()
-			process.waitUntilExit()
-			return (String(decoding: data, as: UTF8.self), process.terminationStatus)
-		}.value
+		// The binary can be a script of the user's own, which can hang, wait on input that
+		// never comes, or leave a child holding the pipe, so reading is raced against the
+		// clock rather than trusted to finish.
+		let reader = Task.detached {
+			let printed = check.read()
+			check.waitUntilExit()
 
-		guard output.1 != 0 else { return .valid }
+			return printed
+		}
 
-		return .failed(reason: ServerValidation.reason(in: output.0))
+		let printed = await withTaskCancellationHandler {
+			await Self.first(of: reader, within: validationTimeout)
+		} onCancel: {
+			check.signal(SIGTERM)
+		}
+
+		guard let printed else {
+			Task { await Self.end(check) }
+
+			return .failed(reason: "The config check did not finish")
+		}
+
+		guard check.reap() != 0 else { return .valid }
+
+		return .failed(reason: ServerValidation.reason(in: printed))
+	}
+
+	/// The reader's answer, or nothing once the wait is over. A task group would hold this
+	/// until every child returned, and the child reading the pipe is the one that hangs.
+	private static func first(
+		of reader: Task<String, Never>,
+		within timeout: Duration
+	) async -> String? {
+		let answer = FirstAnswer()
+
+		return await withCheckedContinuation { continuation in
+			Task {
+				answer.deliver(await reader.value, to: continuation)
+			}
+
+			Task {
+				try? await Task.sleep(for: timeout)
+				answer.deliver(nil, to: continuation)
+			}
+		}
+	}
+
+	/// A script that ignores SIGTERM, and whatever it started, still has to go. The status
+	/// is collected only once the last signal is out.
+	private static func end(_ check: GroupedProcess) async {
+		check.signal(SIGTERM)
+
+		try? await Task.sleep(for: .seconds(1))
+
+		check.signal(SIGKILL)
+		check.reap()
 	}
 
 	public func isRunning(pid: Int32) -> Bool {
@@ -201,6 +248,26 @@ extension ServerValidation {
 		guard let detail = text.firstMatch(of: /\s*error="(.+)"\s*$/) else { return String(text) }
 
 		return text[..<detail.range.lowerBound] + ": " + detail.1
+	}
+}
+
+/// Whichever of the reader and the clock answers first, once.
+private final class FirstAnswer: @unchecked Sendable {
+	private let lock = NSLock()
+	private var delivered = false
+
+	func deliver(
+		_ value: String?,
+		to continuation: CheckedContinuation<String?, Never>
+	) {
+		lock.lock()
+		let isFirst = !delivered
+		delivered = true
+		lock.unlock()
+
+		guard isFirst else { return }
+
+		continuation.resume(returning: value)
 	}
 }
 

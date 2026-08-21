@@ -245,6 +245,73 @@ struct ServerSupervisorTests {
 		#expect(records.record == record)
 	}
 
+	@Test("starts nothing when Settings points at another machine")
+	func refusesToStartForARemoteAddress() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+		let remote = ServerAddress(host: "build-box.local", port: 28080)!
+
+		await supervisor.use(address: remote, plan: .test)
+
+		#expect(supervisor.state == .remote)
+		#expect(runner.launched.isEmpty)
+		#expect(supervisor.canStart == false)
+	}
+
+	@Test("does not take a server on another machine for its own")
+	func doesNotAdoptARemoteServer() async {
+		let runner = FakeRunner()
+		runner.adoptable[4242] = FakeServerProcess(pid: 4242)
+		let records = MemoryRecordStore(record: ServerRecord(pid: 4242, port: 28080, owner: 901))
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: 901
+		)
+		let remote = ServerAddress(host: "build-box.local", port: 28080)!
+
+		await supervisor.use(address: remote, plan: .test)
+
+		#expect(supervisor.state == .running(owned: false))
+	}
+
+	@Test("counts a port as a server only when it reports a project")
+	func recognisesAProcessComposeServer() {
+		let project = Data(
+			#"{"projectName":"stack","version":"v1.122.0","processNum":1,"runningProcessNum":1,"upTime":1000,"fileNames":[]}"#
+				.utf8
+		)
+
+		#expect(LiveServerReachability.answers(status: 200, body: project))
+		#expect(LiveServerReachability.answers(status: 200, body: Data(#"{"error":"not found"}"#.utf8)) == false)
+		#expect(LiveServerReachability.answers(status: 404, body: project) == false)
+	}
+
+	@Test("keeps the running server when its request was abandoned")
+	func keepsTheServerWhenTheRequestIsCancelled() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		let other = ServerAddress(host: "localhost", port: 28081)!
+		let abandoned = Task { await supervisor.use(address: other, plan: .test) }
+		abandoned.cancel()
+		await abandoned.value
+
+		#expect(runner.started?.isRunning == true)
+		#expect(supervisor.state == .running(owned: true))
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

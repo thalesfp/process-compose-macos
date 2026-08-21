@@ -115,6 +115,13 @@ struct ServerLaunchTests {
 		#expect(learned == nil)
 	}
 
+	@Test("knows which addresses are this machine")
+	func recognisesLoopback() throws {
+		#expect(try #require(ServerAddress(host: "localhost", port: 28080)).isLoopback)
+		#expect(try #require(ServerAddress(host: "127.0.0.1", port: 28080)).isLoopback)
+		#expect(try #require(ServerAddress(host: "build-box.local", port: 28080)).isLoopback == false)
+	}
+
 	@Test("finds the first install prefix that holds the binary")
 	func discoversBinary() {
 		let found = ServerBinary.discover { $0 == "/usr/local/bin/process-compose" }
