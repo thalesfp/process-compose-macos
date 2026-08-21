@@ -207,7 +207,7 @@ struct StackView: View {
 		switch server.state {
 		case .failed(let reason): reason
 		case .unconfigured:
-			"Point Settings at a process-compose binary and config to start one from here, or run it yourself. The app reconnects on its own."
+			"Choose the config for this stack and the app starts it from here. It reconnects on its own if you run the stack yourself."
 		case .idle, .running:
 			"The app starts one when nothing answers the port, and reconnects on its own."
 		}
@@ -278,8 +278,12 @@ struct StackView: View {
 				Text(serverAdvice)
 					.font(.callout)
 			} actions: {
-				Button("Start Server") { Task { await server.start() } }
-					.disabled(!server.canStart)
+				if server.state == .unconfigured {
+					Button("Choose Config") { chooseConfig() }
+				} else {
+					Button("Start Server") { Task { await server.start() } }
+						.disabled(!server.canStart)
+				}
 			}
 		} else if model.processes.isEmpty {
 			ProgressView("Connecting")
@@ -426,6 +430,10 @@ struct StackView: View {
 	private struct ServerInputs: Equatable {
 		let address: ServerAddress?
 		let plan: ServerLaunchPlan?
+	}
+
+	private func chooseConfig() {
+		FilePicker.choose("Project config", startingAt: configPath).map { configPath = $0 }
 	}
 
 	private func reconnect() {

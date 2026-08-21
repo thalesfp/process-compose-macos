@@ -80,19 +80,7 @@ private struct PathField: View {
 	}
 
 	private func choose() {
-		let panel = NSOpenPanel()
-		panel.canChooseFiles = !isDirectory
-		panel.canChooseDirectories = isDirectory
-		panel.allowsMultipleSelection = false
-		panel.prompt = "Choose"
-		panel.message = title
-		if !path.isEmpty {
-			panel.directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent()
-		}
-
-		guard panel.runModal() == .OK, let url = panel.url else { return }
-
-		path = url.path
+		FilePicker.choose(title, isDirectory: isDirectory, startingAt: path).map { path = $0 }
 	}
 }
 
