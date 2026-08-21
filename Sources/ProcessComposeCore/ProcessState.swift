@@ -197,24 +197,28 @@ public struct ProjectState: Decodable, Sendable, Hashable {
 	public let processNum: Int
 	public let runningProcessNum: Int
 	public let upTimeNanoseconds: Int64
+	public let configFiles: [String]?
 
 	public init(
 		projectName: String,
 		version: String,
 		processNum: Int,
 		runningProcessNum: Int,
-		upTimeNanoseconds: Int64
+		upTimeNanoseconds: Int64,
+		configFiles: [String]?
 	) {
 		self.projectName = projectName
 		self.version = version
 		self.processNum = processNum
 		self.runningProcessNum = runningProcessNum
 		self.upTimeNanoseconds = upTimeNanoseconds
+		self.configFiles = configFiles
 	}
 
 	enum CodingKeys: String, CodingKey {
 		case projectName, version, processNum, runningProcessNum
 		case upTimeNanoseconds = "upTime"
+		case configFiles = "fileNames"
 	}
 
 	public var upTime: Duration { .nanoseconds(upTimeNanoseconds) }

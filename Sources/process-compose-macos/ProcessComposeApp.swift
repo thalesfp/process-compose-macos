@@ -22,7 +22,7 @@ struct ProcessComposeApp: App {
 		.defaultSize(width: 980, height: 760)
 		.windowToolbarStyle(.unified)
 		.commands {
-			StackCommands(model: model, logModel: logModel, mcpModel: mcpModel, logFontSize: $logFontSize)
+			StackCommands(model: model, logModel: logModel, logFontSize: $logFontSize)
 		}
 
 		Settings {

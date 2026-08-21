@@ -388,7 +388,8 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 			version: "v1.122.0",
 			processNum: 0,
 			runningProcessNum: 0,
-			upTimeNanoseconds: 0
+			upTimeNanoseconds: 0,
+			configFiles: ["/tmp/process-compose.yaml"]
 		)
 	}
 

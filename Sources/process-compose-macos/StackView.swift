@@ -85,9 +85,26 @@ struct StackView: View {
 	private var mcpReadout: some View {
 		let help = mcpHelp
 
-		return statusDot("MCP", color: mcpModel.isReachable ? .green : .secondary, describedBy: help)
-			.help(help)
-			.contextMenu { CopyMCPURLButton(mcpModel: mcpModel) }
+		return Menu {
+			Text(mcpHelp)
+
+			Divider()
+
+			Button("Copy MCP URL") { mcpModel.url.map { NSPasteboard.copy($0.absoluteString) } }
+				.disabled(mcpModel.url == nil)
+
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
+				.disabled(configURLs.isEmpty)
+		} label: {
+			statusDot("MCP", color: mcpModel.isReachable ? .green : .secondary, describedBy: help)
+		}
+		.menuIndicator(.hidden)
+		.fixedSize()
+		.help(help)
+	}
+
+	private var configURLs: [URL] {
+		(model.project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
 	}
 
 	private var mcpHelp: String {
