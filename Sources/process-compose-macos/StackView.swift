@@ -23,6 +23,7 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 
 	@State private var isShowingServerLog = false
+	@State private var isSettingUpServer = false
 
 	var body: some View {
 		NavigationSplitView(columnVisibility: columnVisibility) {
@@ -67,6 +68,7 @@ struct StackView: View {
 		.task(id: ServerInputs(address: address, plan: launchPlan)) {
 			await server.use(address: address, plan: launchPlan)
 		}
+		.sheet(isPresented: $isSettingUpServer) { ServerSetupSheet() }
 		.confirmationDialog(
 			model.stopStackQuestion,
 			isPresented: $model.isConfirmingStopStack
@@ -189,6 +191,8 @@ struct StackView: View {
 			Button("Stop Server") { Task { await server.stop() } }
 				.disabled(!server.isOwned)
 
+			Button("Set Up Server") { isSettingUpServer = true }
+
 			Divider()
 
 			Button("Show Server Log") { isShowingServerLog = true }
@@ -279,7 +283,7 @@ struct StackView: View {
 					.font(.callout)
 			} actions: {
 				if server.state == .unconfigured {
-					Button("Choose Config") { chooseConfig() }
+					Button("Set Up Server") { isSettingUpServer = true }
 				} else {
 					Button("Start Server") { Task { await server.start() } }
 						.disabled(!server.canStart)
@@ -430,10 +434,6 @@ struct StackView: View {
 	private struct ServerInputs: Equatable {
 		let address: ServerAddress?
 		let plan: ServerLaunchPlan?
-	}
-
-	private func chooseConfig() {
-		FilePicker.choose("Project config", startingAt: configPath).map { configPath = $0 }
 	}
 
 	private func reconnect() {

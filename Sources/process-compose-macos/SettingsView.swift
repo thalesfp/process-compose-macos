@@ -46,7 +46,7 @@ private struct ServerSettings: View {
 					Button("Validate") { validate() }
 						.controlSize(.small)
 						.disabled(plan == nil || isValidating)
-					validationReadout
+					ValidationReadout(validation: validation)
 					Spacer(minLength: 0)
 				}
 			} footer: {
@@ -92,24 +92,6 @@ extension ServerSettings {
 			workingDirectoryPath: workingDirectory,
 			port: port
 		)
-	}
-
-	@ViewBuilder
-	fileprivate var validationReadout: some View {
-		switch validation {
-		case .valid:
-			Label("The config loads", systemImage: "checkmark.circle.fill")
-				.foregroundStyle(.green)
-				.font(.caption)
-		case .failed(let reason):
-			Label(reason, systemImage: "exclamationmark.triangle.fill")
-				.foregroundStyle(.orange)
-				.font(.caption)
-				.multilineTextAlignment(.leading)
-				.textSelection(.enabled)
-		case nil:
-			EmptyView()
-		}
 	}
 
 	fileprivate func validate() {
