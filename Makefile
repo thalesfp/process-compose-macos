@@ -3,9 +3,9 @@
 APP_NAME := $(shell ./Scripts/bundle.sh --name)
 APP := build/$(APP_NAME)
 INSTALL_DIR := /Applications
-# Releases up to 0.2.0 installed as Conductor.app under this identifier.
-LEGACY_APP_NAME := Conductor.app
-LEGACY_APP_ID := me.thales.conductor
+# Every identifier this app has shipped under, so a rename does not leave the copy
+# installed under the previous name behind.
+APP_IDS := me.thales.conductor|me.thales.process-compose-macos
 
 .PHONY: help
 help: ## Show this help
@@ -39,11 +39,13 @@ app: ## Assemble the .app into build/
 install: app ## Build and copy the app to /Applications
 	rm -rf "$(INSTALL_DIR)/$(APP_NAME)"
 	cp -R "$(APP)" "$(INSTALL_DIR)/$(APP_NAME)"
-	@legacy="$(INSTALL_DIR)/$(LEGACY_APP_NAME)"; \
-	if [ "$$(plutil -extract CFBundleIdentifier raw -o - "$$legacy/Contents/Info.plist" 2>/dev/null)" = "$(LEGACY_APP_ID)" ]; then \
-		rm -rf "$$legacy"; \
-		echo "removed $$legacy"; \
-	fi
+	@for candidate in "$(INSTALL_DIR)"/*.app; do \
+		if [ -d "$$candidate" ] && [ "$$candidate" != "$(INSTALL_DIR)/$(APP_NAME)" ]; then \
+			case "$$(plutil -extract CFBundleIdentifier raw -o - "$$candidate/Contents/Info.plist" 2>/dev/null)" in \
+				$(APP_IDS)) rm -rf "$$candidate"; echo "removed $$candidate";; \
+			esac; \
+		fi; \
+	done
 	@echo "installed $(INSTALL_DIR)/$(APP_NAME)"
 
 .PHONY: clean

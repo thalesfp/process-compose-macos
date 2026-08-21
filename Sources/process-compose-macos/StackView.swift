@@ -24,7 +24,7 @@ struct StackView: View {
 		}
 		.overlay(alignment: .bottom) { errorBar }
 		.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
-		.navigationTitle(model.project?.projectName ?? "Process Compose for macOS")
+		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
 		.onChange(of: bufferLines, initial: true) { _, lines in logModel.maxLines = lines }

@@ -1,10 +1,10 @@
 #!/bin/bash
-# Assembles Process Compose for macOS.app around the release binary.
+# Assembles Process Compose.app around the release binary.
 set -euo pipefail
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-APP_NAME="Process Compose for macOS.app"
+APP_NAME="Process Compose.app"
 
 if [ "${1:-}" = "--name" ]; then
 	echo "$APP_NAME"
@@ -29,7 +29,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Process Compose for macOS</string>
+	<string>Process Compose</string>
 	<key>CFBundleExecutable</key>
 	<string>process-compose-macos</string>
 	<key>CFBundleIconFile</key>
@@ -39,7 +39,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Process Compose for macOS</string>
+	<string>Process Compose</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
