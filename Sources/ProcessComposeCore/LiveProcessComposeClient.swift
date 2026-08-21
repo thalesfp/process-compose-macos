@@ -111,31 +111,35 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 		query: [URLQueryItem]
 	) -> AsyncThrowingStream<Frame, any Error> {
 		let task = session.webSocketTask(with: address.url(path: path, scheme: "ws", query: query))
-		let decoder = JSONDecoder()
 
 		return AsyncThrowingStream(bufferingPolicy: .bufferingNewest(4096)) { continuation in
-			// URLSessionWebSocketTask delivers one message per receive call, so the
-			// handler re-arms itself until the socket fails or the stream is dropped.
-			func receiveNext() {
-				task.receive { result in
-					switch result {
-					case .success(let message):
+			task.resume()
+
+			// URLSessionWebSocketTask delivers one message per receive call, so frames are
+			// read in a loop until the socket fails or the stream is dropped.
+			let pump = Task {
+				let decoder = JSONDecoder()
+
+				do {
+					while true {
+						let message = try await task.receive()
+
 						guard let frame: Frame = Self.decode(message, using: decoder) else {
 							continuation.finish(throwing: ProcessComposeError.unreadableFrame)
 							return
 						}
+
 						continuation.yield(frame)
-						receiveNext()
-					case .failure(let error):
-						continuation.finish(throwing: error)
 					}
+				} catch {
+					continuation.finish(throwing: error)
 				}
 			}
 
-			continuation.onTermination = { _ in task.cancel(with: .goingAway, reason: nil) }
-
-			task.resume()
-			receiveNext()
+			continuation.onTermination = { _ in
+				pump.cancel()
+				task.cancel(with: .goingAway, reason: nil)
+			}
 		}
 	}
 
