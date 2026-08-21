@@ -35,7 +35,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>me.thales.process-compose-macos</string>
+	<string>me.thales.process-compose</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>

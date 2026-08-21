@@ -5,7 +5,7 @@ APP := build/$(APP_NAME)
 INSTALL_DIR := /Applications
 # Every identifier this app has shipped under, so a rename does not leave the copy
 # installed under the previous name behind.
-APP_IDS := me.thales.conductor|me.thales.process-compose-macos
+APP_IDS := me.thales.conductor|me.thales.process-compose-macos|me.thales.process-compose
 
 .PHONY: help
 help: ## Show this help
