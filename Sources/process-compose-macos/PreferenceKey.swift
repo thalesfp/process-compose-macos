@@ -11,6 +11,8 @@ enum PreferenceKey {
 	static let logBackfill = "logBackfill"
 	static let splitFraction = "splitFraction"
 	static let selectedProject = "selectedProject"
+	static let serverBinaryPath = "serverBinaryPath"
+	static let serverConfigPath = "serverConfigPath"
 	static let sidebarVisible = "sidebarVisible"
 }
 
@@ -21,4 +23,6 @@ enum PreferenceDefault {
 	static let logBufferLines = 2000
 	static let logBackfill = 300
 	static let splitFraction = 0.6
+	static let serverBinaryPath = ServerBinary.discover() ?? ""
+	static let serverConfigPath = ""
 }

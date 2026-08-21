@@ -6,6 +6,7 @@ struct StackView: View {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
 	let mcpModel: MCPServerViewModel
+	let server: ServerSupervisor
 
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -16,7 +17,11 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.logBufferLines) private var bufferLines = PreferenceDefault.logBufferLines
 	@AppStorage(PreferenceKey.logBackfill) private var backfill = PreferenceDefault.logBackfill
 	@AppStorage(PreferenceKey.selectedProject) private var storedProject = ""
+	@AppStorage(PreferenceKey.serverBinaryPath) private var binaryPath = PreferenceDefault.serverBinaryPath
+	@AppStorage(PreferenceKey.serverConfigPath) private var configPath = PreferenceDefault.serverConfigPath
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
+
+	@State private var isShowingServerLog = false
 
 	var body: some View {
 		NavigationSplitView(columnVisibility: columnVisibility) {
@@ -25,7 +30,11 @@ struct StackView: View {
 			VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
 				content
 			} bottom: {
-				LogPane(model: logModel)
+				if isShowingServerLog {
+					ServerLogPane(log: server.log, status: serverStatus) { isShowingServerLog = false }
+				} else {
+					LogPane(model: logModel)
+				}
 			}
 			.overlay(alignment: .bottom) { errorBar }
 			.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
@@ -33,13 +42,30 @@ struct StackView: View {
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
-		.onChange(of: bufferLines, initial: true) { _, lines in logModel.maxLines = lines }
+		.onChange(of: bufferLines, initial: true) { _, lines in
+			logModel.maxLines = lines
+			server.log.maxLines = lines
+		}
 		.onChange(of: backfill, initial: true) { _, lines in logModel.backfill = lines }
 		.onChange(of: address, initial: true) { _, _ in reconnect() }
 		.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
-		.onChange(of: model.selection) { _, name in logModel.select(name) }
+		.onChange(of: model.selection) { _, name in
+			logModel.select(name)
+			if name != nil { isShowingServerLog = false }
+		}
 		.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
+		.onChange(of: model.project?.configFiles ?? []) { _, files in
+			ServerLaunchPlan.learnedConfiguration(from: files, current: configPath)
+				.map { configPath = $0 }
+		}
+		.onChange(of: model.connection) { _, connection in
+			guard case .disconnected = connection else { return }
+			Task { await server.recheck() }
+		}
 		.task { if !storedProject.isEmpty { model.select(project: storedProject) } }
+		.task(id: ServerInputs(address: address, plan: launchPlan)) {
+			await server.use(address: address, plan: launchPlan)
+		}
 		.confirmationDialog(
 			model.stopStackQuestion,
 			isPresented: $model.isConfirmingStopStack
@@ -101,6 +127,10 @@ struct StackView: View {
 
 				Divider()
 					.frame(height: 12)
+				serverReadout
+
+				Divider()
+					.frame(height: 12)
 				mcpReadout
 			}
 		}
@@ -144,6 +174,53 @@ struct StackView: View {
 		.help(help)
 	}
 
+	private var serverReadout: some View {
+		let help = serverStatus
+
+		return Menu {
+			Text(help)
+
+			Divider()
+
+			Button("Start Server") { server.start() }
+				.disabled(!server.canStart)
+
+			Button("Stop Server") { Task { await server.stop() } }
+				.disabled(!server.isOwned)
+
+			Divider()
+
+			Button("Show Server Log") { isShowingServerLog = true }
+				.disabled(isShowingServerLog)
+		} label: {
+			statusDot("Server", color: serverColor, describedBy: help)
+		}
+		.menuIndicator(.hidden)
+		.fixedSize()
+		.help(help)
+	}
+
+	private var serverColor: Color {
+		switch server.state {
+		case .running: .green
+		case .failed: .orange
+		case .idle, .unconfigured: .secondary
+		}
+	}
+
+	private var serverStatus: String {
+		switch server.state {
+		case .unconfigured: "Settings has no process-compose binary and config to start"
+		case .idle: "No server started"
+		case .running(let owned): owned ? "Running the server this app started" : "Attached to a server started elsewhere"
+		case .failed(let reason): reason
+		}
+	}
+
+	private var launchPlan: ServerLaunchPlan? {
+		ServerLaunchPlan(executablePath: binaryPath, configurationPath: configPath, port: port)
+	}
+
 	private var configURLs: [URL] {
 		(model.project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
 	}
@@ -180,8 +257,15 @@ struct StackView: View {
 				Label("No stack running", systemImage: "bolt.horizontal.circle")
 			} description: {
 				Text(reason)
-				Text("Start it with `make up` in acme. The app reconnects on its own.")
-					.font(.callout)
+				Text(
+					server.state == .unconfigured
+						? "Point Settings at a process-compose binary and config to start one from here, or run it yourself. The app reconnects on its own."
+						: "The app starts one when nothing answers the port, and reconnects on its own."
+				)
+				.font(.callout)
+			} actions: {
+				Button("Start Server") { server.start() }
+					.disabled(!server.canStart)
 			}
 		} else if model.processes.isEmpty {
 			ProgressView("Connecting")
@@ -323,6 +407,11 @@ struct StackView: View {
 
 	private var isConnected: Bool {
 		model.connection == .connected
+	}
+
+	private struct ServerInputs: Equatable {
+		let address: ServerAddress?
+		let plan: ServerLaunchPlan?
 	}
 
 	private func reconnect() {

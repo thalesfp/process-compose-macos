@@ -7,16 +7,18 @@ struct ProcessComposeApp: App {
 	@NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
 	private static let client = LiveProcessComposeClient(address: .fromEnvironment())
+	@MainActor fileprivate static let server = ServerSupervisor()
 
 	@State private var model = StackViewModel(client: client)
 	@State private var logModel = LogViewModel(client: client)
 	@State private var mcpModel = MCPServerViewModel()
+	@State private var server = ProcessComposeApp.server
 
 	@AppStorage(PreferenceKey.logFontSize) private var logFontSize = LogFont.standard
 
 	var body: some Scene {
 		WindowGroup {
-			StackView(model: model, logModel: logModel, mcpModel: mcpModel)
+			StackView(model: model, logModel: logModel, mcpModel: mcpModel, server: server)
 				.frame(minWidth: 900, minHeight: 480)
 		}
 		.defaultSize(width: 1160, height: 760)
@@ -41,5 +43,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 	func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
 		true
+	}
+
+	func applicationWillTerminate(_ notification: Notification) {
+		ProcessComposeApp.server.stopOnQuit()
 	}
 }

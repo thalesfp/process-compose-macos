@@ -1,3 +1,4 @@
+import AppKit
 import ProcessComposeCore
 import SwiftUI
 
@@ -17,6 +18,8 @@ private struct ServerSettings: View {
 	@AppStorage(PreferenceKey.host) private var host = PreferenceDefault.host
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
 	@AppStorage(PreferenceKey.mcpPort) private var mcpPort = PreferenceDefault.mcpPort
+	@AppStorage(PreferenceKey.serverBinaryPath) private var binaryPath = PreferenceDefault.serverBinaryPath
+	@AppStorage(PreferenceKey.serverConfigPath) private var configPath = PreferenceDefault.serverConfigPath
 
 	var body: some View {
 		Form {
@@ -29,8 +32,52 @@ private struct ServerSettings: View {
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}
+
+			Section {
+				PathField("process-compose", path: $binaryPath)
+				PathField("Project config", path: $configPath)
+			} footer: {
+				Text("With both of these set, the app starts the server itself when nothing answers the port, and stops it again when the app quits. A server that is already running is left alone, and the app takes the config from it the first time it connects.")
+					.font(.caption)
+					.foregroundStyle(.secondary)
+			}
 		}
 		.formStyle(.grouped)
+	}
+}
+
+private struct PathField: View {
+	private let title: String
+	@Binding private var path: String
+
+	init(_ title: String, path: Binding<String>) {
+		self.title = title
+		self._path = path
+	}
+
+	var body: some View {
+		HStack(spacing: 8) {
+			TextField(title, text: $path)
+				.truncationMode(.head)
+			Button("Choose") { choose() }
+				.controlSize(.small)
+		}
+	}
+
+	private func choose() {
+		let panel = NSOpenPanel()
+		panel.canChooseFiles = true
+		panel.canChooseDirectories = false
+		panel.allowsMultipleSelection = false
+		panel.prompt = "Choose"
+		panel.message = title
+		if !path.isEmpty {
+			panel.directoryURL = URL(fileURLWithPath: path).deletingLastPathComponent()
+		}
+
+		guard panel.runModal() == .OK, let url = panel.url else { return }
+
+		path = url.path
 	}
 }
 
