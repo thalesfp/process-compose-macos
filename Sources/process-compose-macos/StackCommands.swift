@@ -1,4 +1,4 @@
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 /// The menu bar. Every action the window offers is reachable from here with a key.

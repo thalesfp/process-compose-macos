@@ -1,6 +1,6 @@
 import Testing
 
-@testable import ConductorCore
+@testable import ProcessComposeCore
 
 struct LogRenderingTests {
 	@Test("draws every buffered line into an empty view")

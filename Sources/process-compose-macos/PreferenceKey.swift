@@ -1,4 +1,4 @@
-import ConductorCore
+import ProcessComposeCore
 import Foundation
 
 /// The UserDefaults keys the Settings window and the views share.

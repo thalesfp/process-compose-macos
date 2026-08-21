@@ -1,4 +1,4 @@
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 struct SettingsView: View {
@@ -23,7 +23,7 @@ private struct ServerSettings: View {
 				TextField("Host", text: $host)
 				TextField("Port", value: $port, format: .number.grouping(.never))
 			} footer: {
-				Text("PC_PORT_NUM sets the port the first time Conductor runs. What you type here wins from then on.")
+				Text("PC_PORT_NUM sets the port the first time the app runs. What you type here wins from then on.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}
@@ -56,7 +56,7 @@ private struct LogSettings: View {
 				TextField("Lines kept", value: $bufferLines, format: .number)
 				TextField("Lines replayed on open", value: $backfill, format: .number)
 			} footer: {
-				Text("Conductor keeps this many lines per process in memory and asks the server to replay the newest ones when a log opens.")
+				Text("The app keeps this many lines per process in memory and asks the server to replay the newest ones when a log opens.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}

@@ -1,6 +1,6 @@
 import Testing
 
-@testable import ConductorCore
+@testable import ProcessComposeCore
 
 @MainActor
 struct LogViewModelTests {

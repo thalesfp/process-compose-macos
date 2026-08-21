@@ -1,5 +1,5 @@
 import AppKit
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 /// The log body. An `NSTextView` backs it so a selection can span lines, which a stack

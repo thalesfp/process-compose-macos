@@ -1,4 +1,4 @@
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 /// Two stacked panes with a divider the user drags. The split survives relaunch,

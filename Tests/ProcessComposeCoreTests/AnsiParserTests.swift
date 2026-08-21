@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import ConductorCore
+@testable import ProcessComposeCore
 
 struct AnsiParserTests {
 	@Test("plain text comes back as one unstyled span")

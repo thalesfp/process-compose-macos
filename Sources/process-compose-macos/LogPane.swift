@@ -1,4 +1,4 @@
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 struct LogPane: View {

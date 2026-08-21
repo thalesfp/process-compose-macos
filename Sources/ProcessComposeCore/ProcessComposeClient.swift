@@ -28,7 +28,7 @@ extension ProcessComposeError: LocalizedError {
 		case .server(let message): message
 		case .unexpectedResponse(let status): "Server replied \(status)"
 		case .streamClosed: "The event stream closed"
-		case .unreadableFrame: "The server sent a message Conductor could not read"
+		case .unreadableFrame: "The server sent a message the app could not read"
 		}
 	}
 }

@@ -1,5 +1,5 @@
 import AppKit
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 struct StackView: View {
@@ -22,7 +22,7 @@ struct StackView: View {
 		}
 		.overlay(alignment: .bottom) { errorBar }
 		.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
-		.navigationTitle(model.project?.projectName ?? "Conductor")
+		.navigationTitle(model.project?.projectName ?? "Process Compose for macOS")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
 		.onChange(of: bufferLines, initial: true) { _, lines in logModel.maxLines = lines }
@@ -92,7 +92,7 @@ struct StackView: View {
 				Label("No stack running", systemImage: "bolt.horizontal.circle")
 			} description: {
 				Text(reason)
-				Text("Start it with `make up` in acme. Conductor reconnects on its own.")
+				Text("Start it with `make up` in acme. The app reconnects on its own.")
 					.font(.callout)
 			}
 		} else if model.processes.isEmpty {

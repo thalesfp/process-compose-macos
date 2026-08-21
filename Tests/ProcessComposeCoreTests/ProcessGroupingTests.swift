@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 
-@testable import ConductorCore
+@testable import ProcessComposeCore
 
 struct ProcessGroupingTests {
 	@Test("reads the repo from a working directory inside it")

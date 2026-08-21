@@ -1,8 +1,10 @@
-# Conductor
+# process-compose-macos
 
 A macOS window onto a [process-compose](https://github.com/F1bonacc1/process-compose) dev stack.
 It groups processes by repo and namespace, streams their logs, and starts or stops them one
 at a time or all at once.
+
+Unofficial project. Not affiliated with or endorsed by process-compose.
 
 ## Requirements
 
@@ -13,9 +15,9 @@ at a time or all at once.
 
 ```
 make build     # debug build
-make test      # ConductorCore test suite
+make test      # ProcessComposeCore test suite
 make run       # run without bundling
-make app       # assemble Conductor.app into build/
+make app       # assemble the .app into build/
 make install   # build and copy the app to /Applications
 ```
 
@@ -24,7 +26,7 @@ assembles the `.app` around it.
 
 ## Connecting
 
-Conductor talks to `localhost:28080`. `PC_PORT_NUM` sets the port on first launch, and
+The app talks to `localhost:28080`. `PC_PORT_NUM` sets the port on first launch, and
 Settings (Cmd+,) sets it from then on.
 
 ## Stopping and starting the stack

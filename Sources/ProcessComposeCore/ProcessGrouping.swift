@@ -1,6 +1,6 @@
 import Foundation
 
-/// The subset of a process's config that Conductor reads.
+/// The subset of a process's config that the app reads.
 public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 	public let workingDir: String?
 	public let hasWatcher: Bool

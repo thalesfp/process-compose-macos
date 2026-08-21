@@ -1,17 +1,24 @@
 #!/bin/bash
-# Assembles Conductor.app around the release binary.
+# Assembles Process Compose for macOS.app around the release binary.
 set -euo pipefail
 
 cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-VERSION="${CONDUCTOR_VERSION:-0.2.0}"
-APP="build/Conductor.app"
+APP_NAME="Process Compose for macOS.app"
+
+if [ "${1:-}" = "--name" ]; then
+	echo "$APP_NAME"
+	exit 0
+fi
+
+VERSION="${PROCESS_COMPOSE_MACOS_VERSION:-0.2.0}"
+APP="build/$APP_NAME"
 
 swift build -c release
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/Conductor "$APP/Contents/MacOS/Conductor"
+cp .build/release/process-compose-macos "$APP/Contents/MacOS/process-compose-macos"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -22,17 +29,17 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>Conductor</string>
+	<string>Process Compose for macOS</string>
 	<key>CFBundleExecutable</key>
-	<string>Conductor</string>
+	<string>process-compose-macos</string>
 	<key>CFBundleIconFile</key>
 	<string>AppIcon</string>
 	<key>CFBundleIdentifier</key>
-	<string>me.thales.conductor</string>
+	<string>me.thales.process-compose-macos</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Conductor</string>
+	<string>Process Compose for macOS</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>

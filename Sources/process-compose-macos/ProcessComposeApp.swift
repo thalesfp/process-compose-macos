@@ -1,9 +1,9 @@
 import AppKit
-import ConductorCore
+import ProcessComposeCore
 import SwiftUI
 
 @main
-struct ConductorApp: App {
+struct ProcessComposeApp: App {
 	@NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
 	private static let client = LiveProcessComposeClient(address: .fromEnvironment())

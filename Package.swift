@@ -2,11 +2,11 @@
 import PackageDescription
 
 let package = Package(
-	name: "Conductor",
+	name: "process-compose-macos",
 	platforms: [.macOS(.v14)],
 	targets: [
-		.target(name: "ConductorCore"),
-		.executableTarget(name: "Conductor", dependencies: ["ConductorCore"]),
-		.testTarget(name: "ConductorCoreTests", dependencies: ["ConductorCore"]),
+		.target(name: "ProcessComposeCore"),
+		.executableTarget(name: "process-compose-macos", dependencies: ["ProcessComposeCore"]),
+		.testTarget(name: "ProcessComposeCoreTests", dependencies: ["ProcessComposeCore"]),
 	]
 )

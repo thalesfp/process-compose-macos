@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
-APP := build/Conductor.app
+APP_NAME := $(shell ./Scripts/bundle.sh --name)
+APP := build/$(APP_NAME)
 INSTALL_DIR := /Applications
 
 .PHONY: help
@@ -13,29 +14,29 @@ build: ## Compile the debug build
 	swift build
 
 .PHONY: test
-test: ## Run the ConductorCore test suite
+test: ## Run the ProcessComposeCore test suite
 	swift test
 
 .PHONY: run
 run: ## Run the debug build without bundling it
-	swift run Conductor
+	swift run process-compose-macos
 
 .PHONY: icon
 icon: ## Redraw AppIcon.icns from Scripts/make-icon.swift
-	@rm -rf build/Conductor.iconset
+	@rm -rf build/AppIcon.iconset
 	@mkdir -p build
-	swift Scripts/make-icon.swift build/Conductor.iconset
-	iconutil -c icns build/Conductor.iconset -o Resources/AppIcon.icns
+	swift Scripts/make-icon.swift build/AppIcon.iconset
+	iconutil -c icns build/AppIcon.iconset -o Resources/AppIcon.icns
 
 .PHONY: app
-app: ## Build Conductor.app into build/
+app: ## Assemble the .app into build/
 	./Scripts/bundle.sh
 
 .PHONY: install
 install: app ## Build and copy the app to /Applications
-	rm -rf $(INSTALL_DIR)/Conductor.app
-	cp -R $(APP) $(INSTALL_DIR)/Conductor.app
-	@echo "installed $(INSTALL_DIR)/Conductor.app"
+	rm -rf "$(INSTALL_DIR)/$(APP_NAME)"
+	cp -R "$(APP)" "$(INSTALL_DIR)/$(APP_NAME)"
+	@echo "installed $(INSTALL_DIR)/$(APP_NAME)"
 
 .PHONY: clean
 clean: ## Remove build products

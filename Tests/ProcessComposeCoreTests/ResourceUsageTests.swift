@@ -1,6 +1,6 @@
 import Testing
 
-@testable import ConductorCore
+@testable import ProcessComposeCore
 
 struct ResourceUsageTests {
 	@Test("adds up what the running processes are using")

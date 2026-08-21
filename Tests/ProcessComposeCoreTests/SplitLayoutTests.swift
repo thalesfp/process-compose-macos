@@ -1,6 +1,6 @@
 import Testing
 
-@testable import ConductorCore
+@testable import ProcessComposeCore
 
 struct SplitLayoutTests {
 	@Test("gives each pane its share of the window")
