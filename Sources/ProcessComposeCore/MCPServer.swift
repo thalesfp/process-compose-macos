@@ -75,7 +75,10 @@ public final class MCPServerViewModel {
 		guard let url else { return }
 
 		let reachable = await probe.isReachable(url)
-		guard reachable != isReachable else { return }
+
+		// Task cancellation cannot un-queue a probe that already has its answer, so a
+		// verdict about an endpoint the user has left must not land on the current one.
+		guard url == self.url, reachable != isReachable else { return }
 
 		isReachable = reachable
 	}

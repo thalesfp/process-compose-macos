@@ -49,6 +49,19 @@ struct MCPServerTests {
 		#expect(probe.asked.isEmpty)
 	}
 
+	@Test("ignores a probe result for an endpoint the user has already left")
+	func ignoresAStaleProbeResult() async {
+		let probe = EndpointChangingProbe()
+		let viewModel = MCPServerViewModel(probe: probe)
+		probe.viewModel = viewModel
+		viewModel.watch(ServerAddress(host: "localhost", port: 28081))
+
+		await viewModel.check()
+
+		#expect(viewModel.url == nil)
+		#expect(!viewModel.isReachable)
+	}
+
 	@Test("forgets the old verdict when the port changes")
 	func forgetsTheOldVerdict() async {
 		let viewModel = MCPServerViewModel(probe: StubProbe(reachable: true))
@@ -86,6 +99,18 @@ struct MCPProbeTests {
 	@Test("ignores an event stream the server refused to serve")
 	func rejectsANonSuccessStatus() {
 		#expect(!LiveMCPServerProbe.answersSSE(status: 404, contentType: "text/event-stream"))
+	}
+}
+
+/// Drops the watched endpoint while the probe is in flight, so `check` resumes against an
+/// address the view model has already moved off.
+final class EndpointChangingProbe: MCPServerProbe, @unchecked Sendable {
+	nonisolated(unsafe) weak var viewModel: MCPServerViewModel?
+
+	func isReachable(_ url: URL) async -> Bool {
+		await MainActor.run { viewModel?.watch(nil) }
+
+		return true
 	}
 }
 
