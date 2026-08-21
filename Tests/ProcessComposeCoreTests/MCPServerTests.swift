@@ -114,16 +114,32 @@ final class EndpointChangingProbe: MCPServerProbe, @unchecked Sendable {
 	}
 }
 
+/// `watch` starts a poll of its own, so the test's own call is not the only writer here.
 final class StubProbe: MCPServerProbe, @unchecked Sendable {
-	nonisolated(unsafe) var asked: [String] = []
+	private let lock = NSLock()
+	private var probed: [String] = []
 	private let reachable: Bool
 
 	init(reachable: Bool = false) {
 		self.reachable = reachable
 	}
 
+	var asked: [String] {
+		lock.lock()
+		defer { lock.unlock() }
+		return probed
+	}
+
 	func isReachable(_ url: URL) async -> Bool {
-		asked.append(url.absoluteString)
+		record(url.absoluteString)
+
 		return reachable
+	}
+
+	private func record(_ url: String) {
+		lock.lock()
+		defer { lock.unlock() }
+
+		probed.append(url)
 	}
 }
