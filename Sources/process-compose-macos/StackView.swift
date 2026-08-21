@@ -5,12 +5,14 @@ import SwiftUI
 struct StackView: View {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
+	let mcpModel: MCPServerViewModel
 
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
 	@AppStorage(PreferenceKey.host) private var host = PreferenceDefault.host
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
+	@AppStorage(PreferenceKey.mcpPort) private var mcpPort = PreferenceDefault.mcpPort
 	@AppStorage(PreferenceKey.logBufferLines) private var bufferLines = PreferenceDefault.logBufferLines
 	@AppStorage(PreferenceKey.logBackfill) private var backfill = PreferenceDefault.logBackfill
 
@@ -28,6 +30,7 @@ struct StackView: View {
 		.onChange(of: bufferLines, initial: true) { _, lines in logModel.maxLines = lines }
 		.onChange(of: backfill, initial: true) { _, lines in logModel.backfill = lines }
 		.onChange(of: address, initial: true) { _, _ in reconnect() }
+		.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
 		.onChange(of: model.selection) { _, name in logModel.select(name) }
 		.confirmationDialog(
 			"Stop every running process?",
@@ -43,28 +46,55 @@ struct StackView: View {
 	private var toolbar: some ToolbarContent {
 		ToolbarItem(placement: .status) {
 			HStack(spacing: 12) {
-				HStack(spacing: 6) {
-					Circle()
-						.fill(isConnected ? Color.green : Color.red)
-						.frame(width: 8, height: 8)
-					Text(isConnected ? "Connected" : "Offline")
-						.font(.callout)
-						.foregroundStyle(.secondary)
-				}
-				.accessibilityElement(children: .ignore)
-				.accessibilityLabel(isConnected ? "Connected to the server" : "Not connected to the server")
+				statusDot(
+					isConnected ? "Connected" : "Offline",
+					color: isConnected ? .green : .red,
+					describedBy: isConnected ? "Connected to the server" : "Not connected to the server"
+				)
 
 				if isConnected {
 					Divider()
 						.frame(height: 12)
 					usageReadout
 				}
+
+				Divider()
+					.frame(height: 12)
+				mcpReadout
 			}
 		}
 
 		ToolbarItem(placement: .primaryAction) {
 			powerControl
 		}
+	}
+
+	private func statusDot(_ label: String, color: Color, describedBy description: String) -> some View {
+		HStack(spacing: 6) {
+			Circle()
+				.fill(color)
+				.frame(width: 8, height: 8)
+			Text(label)
+				.font(.callout)
+				.foregroundStyle(.secondary)
+		}
+		.accessibilityElement(children: .ignore)
+		.accessibilityLabel(description)
+	}
+
+	private var mcpReadout: some View {
+		let help = mcpHelp
+
+		return statusDot("MCP", color: mcpModel.isReachable ? .green : .secondary, describedBy: help)
+			.help(help)
+			.contextMenu { CopyMCPURLButton(mcpModel: mcpModel) }
+	}
+
+	private var mcpHelp: String {
+		guard let url = mcpModel.url else { return "Settings has no usable MCP port" }
+		return mcpModel.isReachable
+			? "MCP server answering at \(url.absoluteString)"
+			: "No MCP server at \(url.absoluteString)"
 	}
 
 	@ViewBuilder
@@ -234,6 +264,10 @@ struct StackView: View {
 
 	private var address: ServerAddress? {
 		ServerAddress(host: host, port: port)
+	}
+
+	private var mcpAddress: ServerAddress? {
+		ServerAddress(host: host, port: mcpPort)
 	}
 
 	private var isConnected: Bool {

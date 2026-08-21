@@ -1,7 +1,6 @@
 import Foundation
 
 /// Runs an attempt over and over until the task is cancelled, pausing between tries.
-/// Both view models follow a dropped socket this way.
 enum Reconnecting {
 	static func loop(
 		every delay: Duration,

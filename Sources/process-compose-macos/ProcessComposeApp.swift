@@ -10,18 +10,19 @@ struct ProcessComposeApp: App {
 
 	@State private var model = StackViewModel(client: client)
 	@State private var logModel = LogViewModel(client: client)
+	@State private var mcpModel = MCPServerViewModel()
 
 	@AppStorage(PreferenceKey.logFontSize) private var logFontSize = LogFont.standard
 
 	var body: some Scene {
 		WindowGroup {
-			StackView(model: model, logModel: logModel)
+			StackView(model: model, logModel: logModel, mcpModel: mcpModel)
 				.frame(minWidth: 760, minHeight: 480)
 		}
 		.defaultSize(width: 980, height: 760)
 		.windowToolbarStyle(.unified)
 		.commands {
-			StackCommands(model: model, logModel: logModel, logFontSize: $logFontSize)
+			StackCommands(model: model, logModel: logModel, mcpModel: mcpModel, logFontSize: $logFontSize)
 		}
 
 		Settings {

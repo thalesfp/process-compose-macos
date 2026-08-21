@@ -5,6 +5,7 @@ import SwiftUI
 struct StackCommands: Commands {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
+	let mcpModel: MCPServerViewModel
 	@Binding var logFontSize: Double
 
 	var body: some Commands {
@@ -44,6 +45,11 @@ struct StackCommands: Commands {
 			Button("Copy Name") { copySelectedName() }
 				.keyboardShortcut("c", modifiers: [.command, .shift])
 				.disabled(model.selection == nil)
+
+			Divider()
+
+			CopyMCPURLButton(mcpModel: mcpModel)
+				.keyboardShortcut("m", modifiers: [.command, .shift])
 
 			Divider()
 

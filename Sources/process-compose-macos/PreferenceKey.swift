@@ -5,6 +5,7 @@ import Foundation
 enum PreferenceKey {
 	static let host = "serverHost"
 	static let port = "serverPort"
+	static let mcpPort = "mcpServerPort"
 	static let logFontSize = "logFontSize"
 	static let logBufferLines = "logBufferLines"
 	static let logBackfill = "logBackfill"
@@ -14,6 +15,7 @@ enum PreferenceKey {
 enum PreferenceDefault {
 	static let host = "localhost"
 	static let port = ServerAddress.fromEnvironment().port
+	static let mcpPort = ServerAddress.defaultMCPPort
 	static let logBufferLines = 2000
 	static let logBackfill = 300
 	static let splitFraction = 0.6

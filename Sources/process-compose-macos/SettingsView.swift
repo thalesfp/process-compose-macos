@@ -9,21 +9,23 @@ struct SettingsView: View {
 			LogSettings()
 				.tabItem { Label("Logs", systemImage: "text.alignleft") }
 		}
-		.frame(width: 460, height: 200)
+		.frame(width: 460, height: 230)
 	}
 }
 
 private struct ServerSettings: View {
 	@AppStorage(PreferenceKey.host) private var host = PreferenceDefault.host
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
+	@AppStorage(PreferenceKey.mcpPort) private var mcpPort = PreferenceDefault.mcpPort
 
 	var body: some View {
 		Form {
 			Section {
 				TextField("Host", text: $host)
 				TextField("Port", value: $port, format: .number.grouping(.never))
+				TextField("MCP port", value: $mcpPort, format: .number.grouping(.never))
 			} footer: {
-				Text("PC_PORT_NUM sets the port the first time the app runs. What you type here wins from then on.")
+				Text("PC_PORT_NUM sets the port the first time the app runs. What you type here wins from then on. The MCP port is the one in the stack's mcp_server block; process-compose serves it at /sse.")
 					.font(.caption)
 					.foregroundStyle(.secondary)
 			}
