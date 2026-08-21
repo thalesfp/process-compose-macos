@@ -7,10 +7,17 @@ struct StackCommands: Commands {
 	@Bindable var logModel: LogViewModel
 	@Binding var logFontSize: Double
 
+	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
+
 	var body: some Commands {
 		CommandGroup(replacing: .newItem) {}
 
 		CommandGroup(after: .toolbar) {
+			Button(isSidebarVisible ? "Hide Sidebar" : "Show Sidebar") { isSidebarVisible.toggle() }
+				.keyboardShortcut("s", modifiers: [.command, .control])
+
+			Divider()
+
 			Button("Bigger Log Text") { logFontSize = LogFont.stepped(logFontSize, by: 1) }
 				.keyboardShortcut(KeyEquivalent("="), modifiers: .command)
 				.disabled(logFontSize >= LogFont.range.upperBound)

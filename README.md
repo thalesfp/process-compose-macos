@@ -1,8 +1,8 @@
 # process-compose-macos
 
 A macOS window onto a [process-compose](https://github.com/F1bonacc1/process-compose) dev stack.
-It groups processes by repo and namespace, streams their logs, and starts or stops them one
-at a time or all at once.
+A sidebar picks one project at a time; the list groups that project's processes by namespace,
+streams their logs, and starts or stops them one at a time or all at once.
 
 Unofficial project. Not affiliated with or endorsed by process-compose.
 

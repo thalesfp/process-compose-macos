@@ -10,6 +10,8 @@ enum PreferenceKey {
 	static let logBufferLines = "logBufferLines"
 	static let logBackfill = "logBackfill"
 	static let splitFraction = "splitFraction"
+	static let selectedProject = "selectedProject"
+	static let sidebarVisible = "sidebarVisible"
 }
 
 enum PreferenceDefault {
