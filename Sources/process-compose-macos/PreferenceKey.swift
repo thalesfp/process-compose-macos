@@ -13,6 +13,7 @@ enum PreferenceKey {
 	static let selectedProject = "selectedProject"
 	static let serverBinaryPath = "serverBinaryPath"
 	static let serverConfigPath = "serverConfigPath"
+	static let serverWorkingDirectory = "serverWorkingDirectory"
 	static let sidebarVisible = "sidebarVisible"
 }
 
@@ -25,4 +26,5 @@ enum PreferenceDefault {
 	static let splitFraction = 0.6
 	static let serverBinaryPath = ServerBinary.discover() ?? ""
 	static let serverConfigPath = ""
+	static let serverWorkingDirectory = ""
 }

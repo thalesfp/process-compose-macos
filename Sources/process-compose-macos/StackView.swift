@@ -19,6 +19,7 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.selectedProject) private var storedProject = ""
 	@AppStorage(PreferenceKey.serverBinaryPath) private var binaryPath = PreferenceDefault.serverBinaryPath
 	@AppStorage(PreferenceKey.serverConfigPath) private var configPath = PreferenceDefault.serverConfigPath
+	@AppStorage(PreferenceKey.serverWorkingDirectory) private var workingDirectory = PreferenceDefault.serverWorkingDirectory
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 
 	@State private var isShowingServerLog = false
@@ -182,7 +183,7 @@ struct StackView: View {
 
 			Divider()
 
-			Button("Start Server") { server.start() }
+			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
 			Button("Stop Server") { Task { await server.stop() } }
@@ -218,7 +219,12 @@ struct StackView: View {
 	}
 
 	private var launchPlan: ServerLaunchPlan? {
-		ServerLaunchPlan(executablePath: binaryPath, configurationPath: configPath, port: port)
+		ServerLaunchPlan(
+			executablePath: binaryPath,
+			configurationPath: configPath,
+			workingDirectoryPath: workingDirectory,
+			port: port
+		)
 	}
 
 	private var configURLs: [URL] {
@@ -264,7 +270,7 @@ struct StackView: View {
 				)
 				.font(.callout)
 			} actions: {
-				Button("Start Server") { server.start() }
+				Button("Start Server") { Task { await server.start() } }
 					.disabled(!server.canStart)
 			}
 		} else if model.processes.isEmpty {

@@ -45,10 +45,54 @@ struct ServerLaunchTests {
 		#expect(path?.components(separatedBy: "/opt/homebrew/bin").count == 2)
 	}
 
+	@Test("runs where the config's own paths resolve from")
+	func usesTheChosenWorkingDirectory() throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/repos/stack/process-compose.yaml",
+				workingDirectoryPath: "/Users/dev/repos",
+				port: 28080
+			)
+		)
+
+		#expect(plan.workingDirectory.path == "/Users/dev/repos")
+	}
+
+	@Test("checks the config without running anything")
+	func buildsDryRunArguments() throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				port: 28080
+			)
+		)
+
+		#expect(plan.validationArguments == ["up", "--dry-run", "-f", "/Users/dev/stack/process-compose.yaml"])
+	}
+
+	@Test("reads the fault out of what process-compose printed")
+	func readsTheValidationFault() {
+		let output = "\u{1b}[90m26-08-21 14:27:23\u{1b}[0m \u{1b}[31mFTL\u{1b}[0m Failed to load project\n"
+
+		#expect(ServerValidation.reason(in: output) == "26-08-21 14:27:23 FTL Failed to load project")
+	}
+
+	@Test("leaves a server built from several configs to the user")
+	func ignoresSeveralConfigurations() {
+		let learned = ServerLaunchPlan.learnedConfiguration(
+			from: ["/Users/dev/stack/base.yaml", "/Users/dev/stack/extra.yaml"],
+			current: ""
+		)
+
+		#expect(learned == nil)
+	}
+
 	@Test("takes the config from the server the app connected to")
 	func learnsConfigurationFromTheServer() {
 		let learned = ServerLaunchPlan.learnedConfiguration(
-			from: ["/Users/dev/stack/process-compose.yaml"],
+			from: ["/Users/dev/stack/process-compose.yaml", "/Users/dev/stack/.env"],
 			current: ""
 		)
 

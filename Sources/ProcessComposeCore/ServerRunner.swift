@@ -14,9 +14,16 @@ public protocol ServerProcess: AnyObject {
 	func kill()
 }
 
+public enum ServerValidation: Sendable, Equatable {
+	case valid
+	case failed(reason: String)
+}
+
 @MainActor
 public protocol ServerRunner {
 	func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess
+	/// Loads the config without running it, so a stack that cannot start says why first.
+	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation
 	/// Takes back a server recorded by an earlier run, or nil when that pid is gone or
 	/// belongs to something else now.
 	func adopt(pid: Int32) -> (any ServerProcess)?
@@ -27,6 +34,34 @@ public struct LiveServerRunner: ServerRunner {
 
 	public func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess {
 		try SpawnedServerProcess(plan)
+	}
+
+	public func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
+		let process = Process()
+		let pipe = Pipe()
+
+		process.executableURL = plan.executable
+		process.arguments = plan.validationArguments
+		process.currentDirectoryURL = plan.workingDirectory
+		process.environment = plan.environment(ProcessInfo.processInfo.environment)
+		process.standardOutput = pipe
+		process.standardError = pipe
+
+		do {
+			try process.run()
+		} catch {
+			return .failed(reason: error.localizedDescription)
+		}
+
+		let output = await Task.detached {
+			let data = pipe.fileHandleForReading.readDataToEndOfFile()
+			process.waitUntilExit()
+			return (String(decoding: data, as: UTF8.self), process.terminationStatus)
+		}.value
+
+		guard output.1 != 0 else { return .valid }
+
+		return .failed(reason: ServerValidation.reason(in: output.0))
 	}
 
 	public func adopt(pid: Int32) -> (any ServerProcess)? {
@@ -134,6 +169,21 @@ final class AdoptedServerProcess: ServerProcess {
 
 	func kill() {
 		Darwin.kill(pid, SIGKILL)
+	}
+}
+
+extension ServerValidation {
+	/// process-compose reports the fault as its last log line, coloured and prefixed with
+	/// the level and a timestamp.
+	static func reason(in output: String) -> String {
+		let lines = output
+			.split(whereSeparator: \.isNewline)
+			.map { LogLine(id: 0, spans: AnsiParser.spans(in: String($0))).text }
+			.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+		guard let last = lines.last else { return "The config would not load" }
+
+		return last.trimmingCharacters(in: .whitespaces)
 	}
 }
 

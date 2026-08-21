@@ -4,27 +4,43 @@ import Foundation
 public struct ServerLaunchPlan: Sendable, Hashable {
 	public let executable: URL
 	public let configuration: URL
+	public let workingDirectory: URL
 	public let port: Int
 
-	public init?(executablePath: String, configurationPath: String, port: Int) {
+	/// A config's `working_dir` and `watch` paths resolve against the directory
+	/// process-compose runs in, which is not always the one holding the config.
+	public init?(
+		executablePath: String,
+		configurationPath: String,
+		workingDirectoryPath: String = "",
+		port: Int
+	) {
 		let executable = executablePath.trimmingCharacters(in: .whitespacesAndNewlines)
 		let configuration = configurationPath.trimmingCharacters(in: .whitespacesAndNewlines)
+		let workingDirectory = workingDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
 
 		guard !executable.isEmpty, !configuration.isEmpty, (1 ... 65535).contains(port) else { return nil }
 
-		self.executable = URL(fileURLWithPath: (executable as NSString).expandingTildeInPath, isDirectory: false)
-		self.configuration = URL(fileURLWithPath: (configuration as NSString).expandingTildeInPath, isDirectory: false)
+		self.executable = Self.url(executable)
+		self.configuration = Self.url(configuration)
+		self.workingDirectory = workingDirectory.isEmpty
+			? Self.url(configuration).deletingLastPathComponent()
+			: URL(fileURLWithPath: (workingDirectory as NSString).expandingTildeInPath, isDirectory: true)
 		self.port = port
 	}
 
-	/// Paths inside a process-compose config resolve against the config file's directory.
-	public var workingDirectory: URL {
-		configuration.deletingLastPathComponent()
+	private static func url(_ path: String) -> URL {
+		URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: false)
 	}
 
 	/// `--detached` forks and returns, while `-t=false` keeps a live child to signal.
 	public var arguments: [String] {
 		["up", "-f", configuration.path, "-p", "\(port)", "-t=false", "--keep-project"]
+	}
+
+	/// Loads the config, reports what is wrong with it, and exits without running anything.
+	public var validationArguments: [String] {
+		["up", "--dry-run", "-f", configuration.path]
 	}
 
 	/// An app opened from Finder inherits `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
@@ -44,11 +60,16 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 	}
 
 	/// The config of the server the app is attached to, so a stack started from a terminal
-	/// can be started from the app the next time. A config already set is left alone.
+	/// can be started from the app the next time. A config already set is left alone, and a
+	/// server built from several configs is left to the user, since one of them starts a
+	/// part of the stack.
 	public static func learnedConfiguration(from configFiles: [String], current: String) -> String? {
 		guard current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
 
-		return configFiles.first { !$0.isEmpty }
+		// process-compose reports the env files it loaded alongside the configs.
+		let configs = configFiles.filter { ["yaml", "yml"].contains(URL(fileURLWithPath: $0).pathExtension) }
+
+		return configs.count == 1 ? configs.first : nil
 	}
 
 	static var toolPaths: [String] {

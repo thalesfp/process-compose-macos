@@ -180,6 +180,22 @@ struct ServerSupervisorTests {
 		#expect(supervisor.canStart)
 	}
 
+	@Test("says what is wrong with the config instead of starting it")
+	func refusesAConfigThatWillNotLoad() async {
+		let runner = FakeRunner()
+		runner.validation = .failed(reason: "watch path 'acme/v3' does not exist")
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .failed(reason: "watch path 'acme/v3' does not exist"))
+		#expect(runner.launched.isEmpty)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -245,6 +261,7 @@ private final class FakeRunner: ServerRunner {
 	var launched: [ServerLaunchPlan] = []
 	var adoptable: [Int32: FakeServerProcess] = [:]
 	var failure: (any Error)?
+	var validation: ServerValidation = .valid
 	var ignoresTerminate = false
 	private(set) var started: FakeServerProcess?
 
@@ -257,6 +274,10 @@ private final class FakeRunner: ServerRunner {
 		started = process
 
 		return process
+	}
+
+	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
+		validation
 	}
 
 	func adopt(pid: Int32) -> (any ServerProcess)? {

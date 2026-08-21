@@ -33,10 +33,17 @@ Settings (Cmd+,) sets it from then on.
 
 Point Settings at a `process-compose` binary and a project config, and the app starts the
 server itself when nothing answers the port. It runs
-`process-compose up -f <config> -p <port> -t=false --keep-project` from the config's own
-directory, shows the server's output in the log pane, and stops the server when the app
-quits. A pid file under Application Support lets the next launch take back a server left
-behind by a crash.
+`process-compose up -f <config> -p <port> -t=false --keep-project`, shows the server's
+output in the log pane, and stops the server when the app quits. A pid file under
+Application Support lets the next launch take back a server left behind by a crash.
+
+Working directory is where process-compose runs. A config's `working_dir` and `watch`
+paths are relative to it, so a config that lives in a subdirectory of the workspace needs
+the workspace here. Empty means the config's own directory.
+
+Settings validates a config with `process-compose up --dry-run`, and the app runs the same
+check before it starts a server, so a config that will not load says why instead of leaving
+a server that exits.
 
 A server that is already answering the port is left alone: the app attaches to it and never
 stops it, and it fills the config path in from that server, so a stack started from a

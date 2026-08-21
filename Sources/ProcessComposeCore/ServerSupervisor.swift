@@ -107,15 +107,16 @@ public final class ServerSupervisor {
 			return
 		}
 
-		start(plan)
+		await start(plan, generation: mine)
 	}
 
 	/// Starts the configured server on request, after a failure or after the user stopped it.
-	public func start() {
+	public func start() async {
 		guard let plan, canStart else { return }
 
 		generation += 1
-		start(plan)
+
+		await start(plan, generation: generation)
 	}
 
 	/// The stack went away. A server the app started reports its own exit, but one started
@@ -188,7 +189,16 @@ public final class ServerSupervisor {
 		watch(existing)
 	}
 
-	private func start(_ plan: ServerLaunchPlan) {
+	private func start(_ plan: ServerLaunchPlan, generation mine: Int) async {
+		let validation = await runner.validate(plan)
+
+		guard isCurrent(mine) else { return }
+
+		if case .failed(let reason) = validation {
+			state = .failed(reason: reason)
+			return
+		}
+
 		do {
 			let started = try runner.run(plan)
 
