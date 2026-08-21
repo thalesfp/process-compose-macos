@@ -17,9 +17,9 @@ struct ProcessComposeApp: App {
 	var body: some Scene {
 		WindowGroup {
 			StackView(model: model, logModel: logModel, mcpModel: mcpModel)
-				.frame(minWidth: 760, minHeight: 480)
+				.frame(minWidth: 900, minHeight: 480)
 		}
-		.defaultSize(width: 980, height: 760)
+		.defaultSize(width: 1160, height: 760)
 		.windowToolbarStyle(.unified)
 		.commands {
 			StackCommands(model: model, logModel: logModel, logFontSize: $logFontSize)

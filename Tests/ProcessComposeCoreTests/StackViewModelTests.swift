@@ -19,8 +19,8 @@ struct StackViewModelTests {
 		#expect(viewModel.processes.map(\.name) == ["chatbot", "api"])
 	}
 
-	@Test("groups processes by the repo each one runs in")
-	func groupsByRepo() async {
+	@Test("opens on the first project and shows only its processes")
+	func showsOneProjectAtATime() async {
 		let client = StubClient(processes: [
 			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
@@ -31,8 +31,72 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.groups.map(\.name) == ["acme", "acme-ai-chatbot"])
-		#expect(viewModel.groups[0].stacks[0].processes.map(\.name) == ["api"])
+		#expect(viewModel.projects.map(\.name) == ["acme", "acme-ai-chatbot"])
+		#expect(viewModel.selectedProject == "acme")
+		#expect(viewModel.visibleProcesses.map(\.name) == ["api"])
+	}
+
+	@Test("shows the other project's processes once it is selected")
+	func switchesProject() async {
+		let client = StubClient(processes: [
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["chatbot": "acme-ai-chatbot", "api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+		viewModel.selection = "api"
+
+		viewModel.select(project: "acme-ai-chatbot")
+
+		#expect(viewModel.visibleProcesses.map(\.name) == ["chatbot"])
+		#expect(viewModel.selection == nil)
+	}
+
+	@Test("keeps the project chosen before the connection when the stack still defines it")
+	func keepsRestoredProject() async {
+		let client = StubClient(processes: [
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["chatbot": "acme-ai-chatbot", "api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		viewModel.select(project: "acme-ai-chatbot")
+
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.selectedProject == "acme-ai-chatbot")
+	}
+
+	@Test("falls back to the first project when the chosen one is gone")
+	func fallsBackToFirstProject() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		viewModel.select(project: "retired-repo")
+
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.selectedProject == "acme")
+	}
+
+	@Test("gathers processes with no repo under one project")
+	func gathersUngroupedProcesses() async {
+		let client = StubClient(processes: [
+			.init(name: "stray", namespace: "misc", status: .running, isRunning: true),
+		])
+		let viewModel = StackViewModel(client: client)
+
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.selectedProject == "other")
+		#expect(viewModel.visibleProcesses.map(\.name) == ["stray"])
 	}
 
 	@Test("applies a live state change from the event stream")
@@ -88,8 +152,8 @@ struct StackViewModelTests {
 		#expect(viewModel.lastError == nil)
 	}
 
-	@Test("selects the first process so the log pane opens on something")
-	func selectsFirstProcessOnConnect() async {
+	@Test("selects no process on connect, so nothing streams until it is asked for")
+	func selectsNoProcessOnConnect() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
 			.init(name: "web", namespace: "web", status: .running, isRunning: true),
@@ -99,18 +163,19 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.selection == "api")
-		#expect(viewModel.selectedProcess?.name == "api")
+		#expect(viewModel.selection == nil)
+		#expect(viewModel.selectedProcess == nil)
 	}
 
-	@Test("moves the selection off a process the server stopped reporting")
-	func movesSelectionOffVanishedProcess() async {
+	@Test("drops the selection when the server stops reporting that process")
+	func dropsSelectionOnVanishedProcess() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
 		])
 		let viewModel = StackViewModel(client: client)
 		client.finishStream()
 		await viewModel.observe()
+		viewModel.selection = "api"
 
 		let replacement = StubClient(processes: [
 			.init(name: "web", namespace: "web", status: .running, isRunning: true),
@@ -124,7 +189,7 @@ struct StackViewModelTests {
 			await Task.yield()
 		}
 
-		#expect(viewModel.selection == "web")
+		#expect(viewModel.selection == nil)
 	}
 
 	@Test("keeps a selection the server still reports")
@@ -268,6 +333,33 @@ struct StackViewModelTests {
 		#expect(!viewModel.canStart("api"))
 		#expect(viewModel.canStart("worker"))
 		#expect(!viewModel.canStop("worker"))
+	}
+
+	@Test("says how far a stop reaches when other projects are running too")
+	func namesEveryProjectAStopReaches() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["chatbot": "acme-ai-chatbot", "api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.stopStackQuestion == "Stop 2 running processes across 2 projects?")
+	}
+
+	@Test("asks about the processes alone when one project has all of them")
+	func asksAboutOneProject() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.stopStackQuestion == "Stop 1 running process?")
 	}
 
 	@Test("offers nothing when no processes are known")

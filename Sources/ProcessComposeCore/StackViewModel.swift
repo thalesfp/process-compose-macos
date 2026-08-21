@@ -23,6 +23,9 @@ public final class StackViewModel {
 	/// The row the list and the log pane share. Owned here so the menu bar can act on it.
 	public var selection: String?
 
+	/// The project the sidebar has selected.
+	public private(set) var selectedProject: String?
+
 	/// Whether the window is asking the user to confirm stopping every process. Owned
 	/// here because both the toolbar button and the menu bar item raise it.
 	public var isConfirmingStopStack = false
@@ -48,6 +51,16 @@ public final class StackViewModel {
 		connection == .connected && !isChangingStack && power != .unavailable
 	}
 
+	/// The power button reaches the whole stack while the window shows one project, so
+	/// the confirmation says how far the stop goes.
+	public var stopStackQuestion: String {
+		let count = runningProcesses.count
+		let label = count == 1 ? "1 running process" : "\(count) running processes"
+		let projectCount = projects.filter { $0.runningCount > 0 }.count
+
+		return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
+	}
+
 	/// Stopping asks first because it is destructive; starting does not.
 	public func togglePower() {
 		switch power {
@@ -69,12 +82,23 @@ public final class StackViewModel {
 		}
 	}
 
-	public var groups: [ProjectGroup] {
-		ProcessGrouping.groups(for: processes, projects: projectsByProcess)
+	public var projects: [ProjectGroup] {
+		ProcessGrouping.projects(for: processes, projects: projectsByProcess)
+	}
+
+	public var visibleProcesses: [ProcessState] {
+		projects.first { $0.name == selectedProject }?.processes ?? []
 	}
 
 	public var sections: [StackSection] {
-		ProcessGrouping.sections(for: groups, kinds: kinds)
+		ProcessGrouping.sections(for: visibleProcesses, kinds: kinds)
+	}
+
+	public func select(project: String) {
+		guard project != selectedProject else { return }
+
+		selectedProject = project
+		reconcileSelection()
 	}
 
 	/// What each process is for, decided from its config and how it behaves.
@@ -112,9 +136,7 @@ public final class StackViewModel {
 	private var statesByName: [String: ProcessState] = [:]
 	private var configurations: [String: ProcessConfiguration] = [:]
 
-	private var projectsByProcess: [String: String] {
-		configurations.compactMapValues { ProcessGrouping.project(forWorkingDir: $0.workingDir) }
-	}
+	private var projectsByProcess: [String: String] = [:]
 	private var client: any ProcessComposeClient
 	private let retryDelay: Duration
 	private let now: () -> Date
@@ -283,6 +305,10 @@ public final class StackViewModel {
 			projectReadAt = loadedProject == nil ? nil : now()
 			refreshUptime()
 			configurations = loadedConfigurations
+			projectsByProcess = loadedConfigurations.compactMapValues {
+				ProcessGrouping.project(forWorkingDir: $0.workingDir)
+			}
+			reconcileProject()
 			reconcileSelection()
 			connection = .connected
 
@@ -309,11 +335,20 @@ public final class StackViewModel {
 		!Task.isCancelled && observation == generation
 	}
 
-	/// Keeps the selection on a process the server still reports, so the log pane never
-	/// points at a name that vanished across a reconnect.
+	/// Keeps the sidebar on a project the stack still defines. The projects are read
+	/// from the configurations, so this runs once they have loaded.
+	private func reconcileProject() {
+		let known = projects.map(\.name)
+		if let selectedProject, known.contains(selectedProject) { return }
+
+		selectedProject = known.first
+	}
+
+	/// The one place that decides the selection is a row the list shows, so it survives
+	/// neither a process the server dropped nor a switch to another project.
 	private func reconcileSelection() {
-		if let selection, statesByName[selection] != nil { return }
-		selection = processes.first?.name
+		guard let selection, !visibleProcesses.contains(where: { $0.name == selection }) else { return }
+		self.selection = nil
 	}
 
 	// A process's configuration is fixed for the life of the project, so this runs

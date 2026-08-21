@@ -15,15 +15,21 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.mcpPort) private var mcpPort = PreferenceDefault.mcpPort
 	@AppStorage(PreferenceKey.logBufferLines) private var bufferLines = PreferenceDefault.logBufferLines
 	@AppStorage(PreferenceKey.logBackfill) private var backfill = PreferenceDefault.logBackfill
+	@AppStorage(PreferenceKey.selectedProject) private var storedProject = ""
+	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 
 	var body: some View {
-		VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
-			content
-		} bottom: {
-			LogPane(model: logModel)
+		NavigationSplitView(columnVisibility: columnVisibility) {
+			sidebar
+		} detail: {
+			VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
+				content
+			} bottom: {
+				LogPane(model: logModel)
+			}
+			.overlay(alignment: .bottom) { errorBar }
+			.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
 		}
-		.overlay(alignment: .bottom) { errorBar }
-		.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
@@ -32,14 +38,49 @@ struct StackView: View {
 		.onChange(of: address, initial: true) { _, _ in reconnect() }
 		.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
 		.onChange(of: model.selection) { _, name in logModel.select(name) }
+		.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
+		.task { if !storedProject.isEmpty { model.select(project: storedProject) } }
 		.confirmationDialog(
-			"Stop every running process?",
+			model.stopStackQuestion,
 			isPresented: $model.isConfirmingStopStack
 		) {
 			Button("Stop the stack", role: .destructive) {
 				Task { await model.stopStack() }
 			}
 		}
+	}
+
+	/// The toolbar button and the View menu item both collapse the sidebar, so the
+	/// column reads its state from the preference the menu writes.
+	private var columnVisibility: Binding<NavigationSplitViewVisibility> {
+		Binding(
+			get: { isSidebarVisible ? .all : .detailOnly },
+			set: { isSidebarVisible = $0 != .detailOnly }
+		)
+	}
+
+	/// The projects, one row each. Exactly one is selected, so clicking the empty space
+	/// below the rows leaves the list where it is.
+	private var sidebar: some View {
+		let selection = Binding<String?>(
+			get: { model.selectedProject },
+			set: { name in name.map { model.select(project: $0) } }
+		)
+
+		return List(selection: selection) {
+			ForEach(model.projects) { project in
+				Text(project.name)
+					.lineLimit(1)
+					.truncationMode(.middle)
+					.badge(Text("\(project.runningCount)/\(project.processCount)").monospacedDigit())
+					.tag(project.name)
+					.accessibilityElement(children: .ignore)
+					.accessibilityLabel(
+						"\(project.name), \(project.runningCount) of \(project.processCount) running"
+					)
+			}
+		}
+		.navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 300)
 	}
 
 	@ToolbarContentBuilder
@@ -161,8 +202,6 @@ struct StackView: View {
 		}
 	}
 
-	/// Project, namespace and role, each shown only where it changes, so the reader
-	/// sees four levels without four repeated lines on every section.
 	/// The row and its context menu share one set of actions, so the two can never
 	/// offer different things for the same process.
 	private func row(for state: ProcessState, kind: ProcessKind) -> some View {
@@ -193,29 +232,24 @@ struct StackView: View {
 		}
 	}
 
+	/// Namespace and role, each shown only where it changes. The sidebar names the
+	/// project, so the list does not repeat it.
 	private func sectionHeader(for section: StackSection) -> some View {
 		// A pinned header only reserves the height of its content, so the breathing room
 		// goes on the labels themselves. Padding the container makes it cover the first row.
 		VStack(alignment: .leading, spacing: 6) {
-			if let project = section.project, section.isFirstInProject {
-				Text(project)
-					.font(.title2.weight(.bold))
-					.foregroundStyle(.primary)
-					.padding(.top, 16)
-			}
 			if section.isFirstInNamespace {
 				Text(section.namespace)
 					.font(.title3.weight(.semibold))
 					.foregroundStyle(.secondary)
-					.padding(.top, section.isFirstInProject ? 0 : 14)
-					.padding(.leading, section.project == nil ? 0 : 10)
+					.padding(.top, 14)
 			}
 			if section.showsKind {
 				Text(section.kind.label)
 					.font(.body.weight(.medium))
 					.foregroundStyle(.tertiary)
 					.padding(.top, section.isFirstInNamespace ? 0 : 14)
-					.padding(.leading, section.project == nil ? 10 : 20)
+					.padding(.leading, 10)
 			}
 		}
 		.textCase(nil)

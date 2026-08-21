@@ -26,39 +26,35 @@ struct ProcessGroupingTests {
 		#expect(ProcessGrouping.project(forWorkingDir: nil) == nil)
 	}
 
-	@Test("groups by project, then by stack")
-	func groupsByProjectThenStack() {
+	@Test("lists one sidebar row per project")
+	func listsOneRowPerProject() {
 		let states: [ProcessState] = [
-			.init(name: "api", namespace: "api", status: .running),
-			.init(name: "houston-api", namespace: "houston", status: .running),
-			.init(name: "worker", namespace: "api", status: .running),
-			.init(name: "chatbot", namespace: "ai", status: .running),
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .completed),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
 		]
 		let projects = [
-			"api": "acme", "worker": "acme", "houston-api": "acme",
-			"chatbot": "acme-ai-chatbot",
+			"api": "acme", "worker": "acme", "chatbot": "acme-ai-chatbot",
 		]
 
-		let groups = ProcessGrouping.groups(for: states, projects: projects)
+		let rows = ProcessGrouping.projects(for: states, projects: projects)
 
-		#expect(groups.map(\.name) == ["acme", "acme-ai-chatbot"])
-		#expect(groups[0].stacks.map(\.name) == ["api", "houston"])
-		#expect(groups[0].stacks[0].processes.map(\.name) == ["api", "worker"])
-		#expect(groups[1].stacks.map(\.name) == ["ai"])
+		#expect(rows.map(\.name) == ["acme", "acme-ai-chatbot"])
+		#expect(rows[0].runningCount == 1)
+		#expect(rows[0].processCount == 2)
 	}
 
-	@Test("keeps a single level when every process belongs to one project")
-	func collapsesSingleProject() {
+	@Test("counts a process the config disabled in a project's total")
+	func countsDisabledProcesses() {
 		let states: [ProcessState] = [
-			.init(name: "api", namespace: "api", status: .running),
-			.init(name: "web", namespace: "web", status: .running),
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "relay", namespace: "api", status: .disabled),
 		]
 
-		let groups = ProcessGrouping.groups(for: states, projects: ["api": "solo", "web": "solo"])
+		let rows = ProcessGrouping.projects(for: states, projects: ["api": "acme", "relay": "acme"])
 
-		#expect(groups.count == 1)
-		#expect(groups[0].name == nil)
-		#expect(groups[0].stacks.map(\.name) == ["api", "web"])
+		#expect(rows[0].runningCount == 1)
+		#expect(rows[0].processCount == 2)
 	}
 
 	@Test("sinks processes with no project below the named ones")
@@ -70,9 +66,9 @@ struct ProcessGroupingTests {
 		]
 		let projects = ["api": "acme", "chatbot": "acme-ai-chatbot"]
 
-		let groups = ProcessGrouping.groups(for: states, projects: projects)
+		let rows = ProcessGrouping.projects(for: states, projects: projects)
 
-		#expect(groups.map(\.name) == ["acme", "acme-ai-chatbot", "other"])
+		#expect(rows.map(\.name) == ["acme", "acme-ai-chatbot", "other"])
 	}
 }
 
@@ -80,37 +76,28 @@ struct StackSectionTests {
 	private let services = ["v3-admin": ProcessKind.service, "api": .service]
 	private let tasks = ["style-inputs": ProcessKind.task, "acme-docker": .task]
 
-	@Test("names the project once, above the first section it owns")
-	func projectHeadingAppearsOnce() {
-		let groups = [
-			ProjectGroup(name: "acme", stacks: [
-				StackGroup(name: "api", processes: [.init(name: "api", status: .running)]),
-				StackGroup(name: "web", processes: [.init(name: "v3-admin", status: .running)]),
-			]),
-			ProjectGroup(name: "acme-mcp", stacks: [
-				StackGroup(name: "ai", processes: [.init(name: "acme-mcp", status: .running)]),
-			]),
+	@Test("names a namespace once, above the first section it owns")
+	func namespaceHeadingAppearsOnce() {
+		let states: [ProcessState] = [
+			.init(name: "api", namespace: "api", status: .running),
+			.init(name: "v3-admin", namespace: "web", status: .running),
 		]
 
-		let sections = ProcessGrouping.sections(for: groups, kinds: services)
+		let sections = ProcessGrouping.sections(for: states, kinds: services)
 
-		#expect(sections.map(\.namespace) == ["api", "web", "ai"])
-		#expect(sections.map(\.isFirstInProject) == [true, false, true])
+		#expect(sections.map(\.namespace) == ["api", "web"])
+		#expect(sections.map(\.isFirstInNamespace) == [true, true])
 	}
 
 	@Test("splits a namespace that holds both into a services and a tasks section")
 	func splitsMixedNamespace() {
-		let groups = [
-			ProjectGroup(name: "acme", stacks: [
-				StackGroup(name: "web", processes: [
-					.init(name: "v3-admin", status: .running),
-					.init(name: "style-inputs", status: .watching),
-				]),
-			]),
+		let states: [ProcessState] = [
+			.init(name: "v3-admin", namespace: "web", status: .running),
+			.init(name: "style-inputs", namespace: "web", status: .watching),
 		]
 
 		let sections = ProcessGrouping.sections(
-			for: groups,
+			for: states,
 			kinds: ["v3-admin": .service, "style-inputs": .task]
 		)
 
@@ -121,13 +108,9 @@ struct StackSectionTests {
 
 	@Test("labels a namespace that is only tasks, so nothing looks like a dead service")
 	func labelsTaskOnlyNamespace() {
-		let groups = [
-			ProjectGroup(name: "acme", stacks: [
-				StackGroup(name: "deps", processes: [.init(name: "acme-docker", status: .completed)]),
-			]),
-		]
+		let states: [ProcessState] = [.init(name: "acme-docker", namespace: "deps", status: .completed)]
 
-		let sections = ProcessGrouping.sections(for: groups, kinds: tasks)
+		let sections = ProcessGrouping.sections(for: states, kinds: tasks)
 
 		#expect(sections.map(\.kind) == [.task])
 		#expect(sections[0].showsKind)
@@ -135,29 +118,25 @@ struct StackSectionTests {
 
 	@Test("leaves a namespace of only services unlabelled, since the rows say it")
 	func leavesServiceOnlyNamespaceUnlabelled() {
-		let groups = [
-			ProjectGroup(name: "acme", stacks: [
-				StackGroup(name: "api", processes: [.init(name: "api", status: .running)]),
-			]),
-		]
+		let states: [ProcessState] = [.init(name: "api", namespace: "api", status: .running)]
 
-		let sections = ProcessGrouping.sections(for: groups, kinds: services)
+		let sections = ProcessGrouping.sections(for: states, kinds: services)
 
 		#expect(!sections[0].showsKind)
 	}
 
 	@Test("gives every section a distinct identity")
 	func sectionsAreDistinct() {
-		let groups = [
-			ProjectGroup(name: "acme-mcp", stacks: [
-				StackGroup(name: "ai", processes: [.init(name: "acme-mcp", status: .running)]),
-			]),
-			ProjectGroup(name: "acme-ai-chatbot", stacks: [
-				StackGroup(name: "ai", processes: [.init(name: "chatbot", status: .running)]),
-			]),
+		let states: [ProcessState] = [
+			.init(name: "acme-mcp", namespace: "ai", status: .completed),
+			.init(name: "chatbot", namespace: "ai", status: .running),
+			.init(name: "api", namespace: "api", status: .running),
 		]
 
-		let ids = ProcessGrouping.sections(for: groups, kinds: [:]).map(\.id)
+		let ids = ProcessGrouping.sections(
+			for: states,
+			kinds: ["acme-mcp": .task, "chatbot": .service, "api": .service]
+		).map(\.id)
 
 		#expect(Set(ids).count == ids.count)
 	}
