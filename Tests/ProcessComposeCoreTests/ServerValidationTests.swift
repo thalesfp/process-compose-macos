@@ -117,3 +117,92 @@ private func until(_ condition: @Sendable () -> Bool, within limit: Duration = .
 		try? await Task.sleep(for: .milliseconds(50))
 	}
 }
+
+@MainActor
+struct ServerProcessTests {
+	@Test("stops what a wrapper script started, not just the wrapper")
+	func stopsTheWholeGroup() async throws {
+		let directory = try scratchDirectory("wrapper")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// A wrapper that does not exec leaves the server running as its grandchild.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			echo starting the stack
+			sleep 30 &
+			echo $! > "$(dirname "$0")/child.pid"
+			wait
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let lines = server.output
+		let printed = Task { () -> String? in
+			for await line in lines { return line }
+			return nil
+		}
+
+		let child = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		#expect(await printed.value == "starting the stack")
+
+		server.terminate()
+		await until { kill(child, 0) != 0 }
+
+		#expect(kill(child, 0) != 0)
+	}
+
+	@Test("counts the stack as running while the work outlives the wrapper")
+	func tracksTheWholeGroup() async throws {
+		let directory = try scratchDirectory("outliving")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The wrapper goes on SIGTERM while what it started keeps stopping its own work,
+		// which is what process-compose does with its shutdown commands.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			bash -c 'trap "" TERM; sleep 30' &
+			echo $! > "$(dirname "$0")/child.pid"
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let child = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		server.terminate()
+		try await Task.sleep(for: .milliseconds(500))
+
+		#expect(server.isRunning)
+
+		server.kill()
+		await until { kill(child, 0) != 0 }
+
+		#expect(kill(child, 0) != 0)
+	}
+}
+
+private func scratchDirectory(_ name: String) throws -> URL {
+	let directory = FileManager.default.temporaryDirectory
+		.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
+	try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+	return directory
+}
+
+private func wrapper(in directory: URL, _ body: String) throws -> ServerLaunchPlan {
+	let script = directory.appendingPathComponent("wrapper.sh")
+	try "#!/bin/bash\n\(body)\n".write(to: script, atomically: true, encoding: .utf8)
+	try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: script.path)
+
+	return ServerLaunchPlan(
+		executablePath: script.path,
+		configurationPath: directory.appendingPathComponent("process-compose.yaml").path,
+		port: 28080
+	)!
+}

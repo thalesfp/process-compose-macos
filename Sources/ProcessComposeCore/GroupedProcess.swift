@@ -89,6 +89,39 @@ final class GroupedProcess: @unchecked Sendable {
 		return String(decoding: data, as: UTF8.self)
 	}
 
+	/// Whether anything in the group is still there. A wrapper that starts the server and
+	/// exits leaves the work behind it, so the leader going is not the group going.
+	var hasMembers: Bool {
+		kill(-pid, 0) == 0
+	}
+
+	/// Whether the child is over, without reaping it.
+	var hasExited: Bool {
+		lock.lock()
+		let done = reaped
+		lock.unlock()
+
+		if done { return true }
+
+		var info = siginfo_t()
+		let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
+
+		return result != 0 || info.si_pid == pid
+	}
+
+	/// Hands over what the child prints as it arrives, and returns when the pipe ends.
+	func drain(into handler: (Data) -> Void) {
+		var buffer = [UInt8](repeating: 0, count: 65536)
+
+		while true {
+			let count = Darwin.read(output, &buffer, buffer.count)
+			guard count > 0 else { break }
+			handler(Data(buffer[0 ..< count]))
+		}
+
+		close(output)
+	}
+
 	/// Waits for the child to exit without reaping it, so the pid stays claimed and the
 	/// caller decides when the group is done. Closing stdout is not exiting, so a check
 	/// that goes quiet still has to be waited for.

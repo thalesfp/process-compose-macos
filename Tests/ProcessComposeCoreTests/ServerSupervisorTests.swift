@@ -312,6 +312,27 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state == .running(owned: true))
 	}
 
+	@Test("finishes stopping even when whoever asked has walked away")
+	func stopsDespiteACancelledCaller() async {
+		let runner = FakeRunner()
+		let records = MemoryRecordStore()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		let stopping = Task { await supervisor.stop() }
+		stopping.cancel()
+		await stopping.value
+
+		#expect(runner.started?.didTerminate == true)
+		#expect(supervisor.state == .idle)
+		#expect(records.record == nil)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

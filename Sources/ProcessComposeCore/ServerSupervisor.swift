@@ -57,6 +57,7 @@ public final class ServerSupervisor {
 
 	private var server: (any ServerProcess)?
 	private var watchTask: Task<Void, Never>?
+	private var stopTask: Task<Void, Never>?
 	private var plan: ServerLaunchPlan?
 	private var address: ServerAddress?
 	private var generation = 0
@@ -66,7 +67,9 @@ public final class ServerSupervisor {
 		reachability: any ServerReachability = LiveServerReachability(),
 		records: any ServerRecordStore = FileServerRecordStore(),
 		log: ServerLog = ServerLog(),
-		grace: Duration = .seconds(5),
+		// process-compose runs its own shutdown commands, which it gives ten seconds by
+		// default, so a stack has to be allowed to finish before anything is forced.
+		grace: Duration = .seconds(12),
 		owner: Int32 = ProcessInfo.processInfo.processIdentifier
 	) {
 		self.runner = runner
@@ -99,6 +102,10 @@ public final class ServerSupervisor {
 
 		if address != self.address || plan != self.plan {
 			await stop()
+
+			// Waiting out a shutdown takes long enough for newer settings to arrive, and
+			// this request must not put its own back over them.
+			guard !Task.isCancelled else { return }
 		}
 
 		generation += 1
@@ -158,7 +165,21 @@ public final class ServerSupervisor {
 		state = .idle
 	}
 
+	/// Shutting a stack down outlives whoever asked for it: a settings edit that cancels its
+	/// own task must not leave process-compose half way through stopping its processes.
 	public func stop() async {
+		if let stopTask {
+			await stopTask.value
+			return
+		}
+
+		let stopping = Task { await self.shutDown() }
+		stopTask = stopping
+		await stopping.value
+		stopTask = nil
+	}
+
+	private func shutDown() async {
 		guard let server else {
 			state = .idle
 			return
@@ -172,8 +193,8 @@ public final class ServerSupervisor {
 		release()
 	}
 
-	/// The app is quitting, so the server it started goes with it. Quitting cannot await,
-	/// so this waits in place.
+	/// A quit the app never sees coming, such as a log out, cannot await, so this waits in
+	/// place and gives the stack less room than `stop` does.
 	public func stopOnQuit() {
 		// A copy of the app that started nothing leaves the record for the copy that did.
 		guard let server else {
@@ -188,7 +209,7 @@ public final class ServerSupervisor {
 
 		server.terminate()
 
-		let deadline = ContinuousClock.now.advanced(by: grace)
+		let deadline = ContinuousClock.now.advanced(by: .seconds(5))
 		while server.isRunning, ContinuousClock.now < deadline {
 			usleep(50_000)
 		}
@@ -273,13 +294,7 @@ public final class ServerSupervisor {
 		let deadline = ContinuousClock.now.advanced(by: grace)
 
 		while server.isRunning, ContinuousClock.now < deadline {
-			// A cancelled sleep returns at once, so waiting out the grace period here would
-			// spin the main actor instead of pausing on it.
-			do {
-				try await Task.sleep(for: .milliseconds(50))
-			} catch {
-				return
-			}
+			try? await Task.sleep(for: .milliseconds(50))
 		}
 	}
 

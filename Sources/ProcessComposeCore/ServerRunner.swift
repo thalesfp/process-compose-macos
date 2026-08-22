@@ -129,48 +129,46 @@ public struct LiveServerRunner: ServerRunner {
 final class SpawnedServerProcess: ServerProcess {
 	let output: AsyncStream<String>
 
-	private let process = Process()
+	private let check: GroupedProcess
 	private let exits: AsyncStream<Int32>
 
-	var pid: Int32 { process.processIdentifier }
-	var isRunning: Bool { process.isRunning }
+	var pid: Int32 { check.pid }
+	var isRunning: Bool { check.hasMembers }
 
 	init(_ plan: ServerLaunchPlan) throws {
-		let pipe = Pipe()
+		// The binary can be a script that starts process-compose without replacing itself,
+		// and then the stack is a grandchild. A group of its own is what makes it reachable.
+		check = try GroupedProcess.run(
+			executable: plan.executable,
+			arguments: plan.arguments,
+			workingDirectory: plan.workingDirectory,
+			environment: plan.environment(ProcessInfo.processInfo.environment)
+		)
+
 		let (lines, lineFeed) = AsyncStream<String>.makeStream()
 		let (codes, codeFeed) = AsyncStream<Int32>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
 		output = lines
 		exits = codes
 
-		process.executableURL = plan.executable
-		process.arguments = plan.arguments
-		process.currentDirectoryURL = plan.workingDirectory
-		process.environment = plan.environment(ProcessInfo.processInfo.environment)
-		process.standardOutput = pipe
-		process.standardError = pipe
-
-		let buffer = LineBuffer()
-		pipe.fileHandleForReading.readabilityHandler = { handle in
-			let data = handle.availableData
-
-			// An empty read is the pipe's end of file, and the handler keeps firing until
-			// it is cleared.
-			guard !data.isEmpty else {
-				handle.readabilityHandler = nil
-				lineFeed.finish()
-				return
+		let started = check
+		Task.detached {
+			let buffer = LineBuffer()
+			started.drain { data in
+				for line in buffer.take(data) { lineFeed.yield(line) }
 			}
+			lineFeed.finish()
 
-			for line in buffer.take(data) { lineFeed.yield(line) }
-		}
+			started.waitUntilExit()
+			let status = started.reap()
 
-		process.terminationHandler = { finished in
-			codeFeed.yield(finished.terminationStatus)
+			// The wrapper can go before what it started, and the stack is only over once
+			// nothing in the group is left.
+			while started.hasMembers { usleep(50_000) }
+
+			codeFeed.yield(status)
 			codeFeed.finish()
 		}
-
-		try process.run()
 	}
 
 	func exitCode() async -> Int32 {
@@ -179,13 +177,11 @@ final class SpawnedServerProcess: ServerProcess {
 	}
 
 	func terminate() {
-		guard process.isRunning else { return }
-		process.terminate()
+		check.signal(SIGTERM)
 	}
 
 	func kill() {
-		guard process.isRunning else { return }
-		Darwin.kill(process.processIdentifier, SIGKILL)
+		check.signal(SIGKILL)
 	}
 }
 

@@ -71,8 +71,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 				return
 			}
 
-			ProcessComposeApp.server.stopOnQuit()
-			sender.reply(toApplicationShouldTerminate: true)
+			// Stopping is awaited rather than waited out in place, so process-compose gets
+			// its full shutdown without the app freezing while it takes it.
+			Task { @MainActor in
+				await ProcessComposeApp.server.stop()
+				sender.reply(toApplicationShouldTerminate: true)
+			}
 		}
 
 		return .terminateLater
