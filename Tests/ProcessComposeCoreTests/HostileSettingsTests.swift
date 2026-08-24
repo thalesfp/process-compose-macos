@@ -75,6 +75,14 @@ struct HostileSettingsTests {
 	}
 }
 
+/// Holds a test at the point where the server has answered and the event stream is open.
+@MainActor
+private func untilConnected(_ viewModel: StackViewModel, attempts: Int = 1000) async {
+	for _ in 0 ..< attempts where viewModel.connection != .connected {
+		await Task.yield()
+	}
+}
+
 @MainActor
 struct StackSummaryTests {
 	@Test("counts running processes from live state, not the connection snapshot")
@@ -84,12 +92,15 @@ struct StackSummaryTests {
 			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+		let session = Task { await viewModel.observe() }
+		await untilConnected(viewModel)
 
 		#expect(viewModel.project?.runningProcessNum == 0)
 		#expect(viewModel.runningCount == 1)
 		#expect(viewModel.processCount == 2)
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("republishes the uptime as the clock moves, so the subtitle redraws")
@@ -99,8 +110,8 @@ struct StackSummaryTests {
 		])
 		let clock = MovableClock()
 		let viewModel = StackViewModel(client: client, now: { clock.now })
-		client.finishStream()
-		await viewModel.observe()
+		let session = Task { await viewModel.observe() }
+		await untilConnected(viewModel)
 
 		#expect(viewModel.uptime == .seconds(0))
 
@@ -108,6 +119,9 @@ struct StackSummaryTests {
 		viewModel.refreshUptime()
 
 		#expect(viewModel.uptime == .seconds(60))
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("leaves the old server alone once the log pane is released")

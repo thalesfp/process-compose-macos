@@ -39,6 +39,11 @@ public struct ServerAddress: Sendable, Hashable {
 		return ServerAddress(host: defaultHost, port: Int(raw) ?? defaultPort) ?? .standard
 	}
 
+	/// Only a server on this machine can be one the app started.
+	public var isLoopback: Bool {
+		["localhost", "127.0.0.1", "::1", "[::1]"].contains(host.lowercased())
+	}
+
 	func url(path: String, scheme: String = "http", query: [URLQueryItem] = []) -> URL {
 		var components = URLComponents()
 		components.scheme = scheme

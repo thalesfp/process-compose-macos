@@ -4,7 +4,7 @@ import Observation
 @MainActor
 @Observable
 public final class LogViewModel {
-	public private(set) var lines: [LogLine] = []
+	public var lines: [LogLine] { buffer.lines }
 	public private(set) var selected: String?
 	public private(set) var isStreaming = false
 	public private(set) var lastError: String?
@@ -12,23 +12,18 @@ public final class LogViewModel {
 	/// Whether the pane pins itself to the newest line. Owned by the view.
 	public var isFollowing = true
 
-	/// How many lines the pane keeps. Lowering it drops the oldest lines at once.
-	/// Settings lets the user type any integer, so the value is clamped on the way in.
+	/// How many lines the pane keeps.
 	public var maxLines: Int {
-		get { lineLimit }
-		set {
-			lineLimit = max(1, newValue)
-			trim()
-		}
+		get { buffer.maxLines }
+		set { buffer.maxLines = newValue }
 	}
 
 	/// How many lines the server replays when a stream opens.
 	public var backfill: Int
 
-	private var lineLimit: Int
+	private var buffer: LogBuffer
 	private var client: any ProcessComposeClient
 	private let retryDelay: Duration
-	private var nextID = 0
 	private var streamTask: Task<Void, Never>?
 
 	public init(
@@ -38,7 +33,7 @@ public final class LogViewModel {
 		retryDelay: Duration = .seconds(2)
 	) {
 		self.client = client
-		self.lineLimit = max(1, maxLines)
+		self.buffer = LogBuffer(maxLines: maxLines)
 		self.backfill = backfill
 		self.retryDelay = retryDelay
 	}
@@ -56,7 +51,7 @@ public final class LogViewModel {
 
 		streamTask?.cancel()
 		selected = name
-		lines = []
+		buffer.removeAll()
 		lastError = nil
 		isStreaming = false
 
@@ -73,7 +68,7 @@ public final class LogViewModel {
 	public func clear() async {
 		guard let selected else { return }
 
-		lines = []
+		buffer.removeAll()
 
 		do {
 			try await client.truncateLogs(for: selected)
@@ -102,16 +97,6 @@ public final class LogViewModel {
 	}
 
 	private func append(_ message: LogMessage) {
-		lines.append(
-			LogLine(id: nextID, spans: AnsiParser.spans(in: message.message))
-		)
-		nextID += 1
-
-		trim()
-	}
-
-	private func trim() {
-		guard lines.count > lineLimit else { return }
-		lines.removeFirst(lines.count - lineLimit)
+		buffer.append(message.message)
 	}
 }

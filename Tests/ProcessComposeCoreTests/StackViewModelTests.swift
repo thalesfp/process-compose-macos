@@ -5,6 +5,20 @@ import Testing
 
 @MainActor
 struct StackViewModelTests {
+	@Test("stops reporting a project once its server is gone")
+	func forgetsTheProjectOnDisconnect() async {
+		let client = StubClient(processes: [
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true)
+		])
+		let viewModel = StackViewModel(client: client)
+
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.project == nil)
+		#expect(viewModel.uptime == nil)
+	}
+
 	@Test("lists every process the server reports")
 	func listsProcessesFromInitialLoad() async {
 		let client = StubClient(processes: [

@@ -1,0 +1,546 @@
+import Darwin
+import Foundation
+
+/// A process-compose server the app can signal: either one it started or one a previous
+/// run left behind.
+@MainActor
+public protocol ServerProcess: AnyObject {
+	var pid: Int32 { get }
+	var isRunning: Bool { get }
+	/// What each of its groups is holding, so the stack can be recognised again later.
+	var membership: [Int32: Set<ServerOwner>] { get }
+	/// The server's own output, one line per element, finished when the server exits.
+	var output: AsyncStream<String> { get }
+	func exitCode() async -> Int32
+	func terminate()
+	func kill()
+}
+
+public enum ServerValidation: Sendable, Equatable {
+	case valid
+	case failed(reason: String)
+}
+
+@MainActor
+public protocol ServerRunner {
+	func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess
+	/// Loads the config without running it, so a stack that cannot start says why first.
+	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation
+	/// Takes back a server recorded by an earlier run, or nil when nothing it was recorded as
+	/// holding is still there.
+	func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)?
+	func isRunning(_ owner: ServerOwner) -> Bool
+	/// Whether a recorded stack is still there, without taking it over. A group number that
+	/// belongs to someone else now is not that stack.
+	func isStackRunning(_ members: [Int32: Set<ServerOwner>]) -> Bool
+}
+
+public struct LiveServerRunner: ServerRunner {
+	private let validationTimeout: Duration
+	private let checks: RunningChecks
+
+	public init(validationTimeout: Duration = .seconds(30)) {
+		self.init(validationTimeout: validationTimeout, checks: .shared)
+	}
+
+	init(validationTimeout: Duration, checks: RunningChecks) {
+		self.validationTimeout = validationTimeout
+		self.checks = checks
+	}
+
+	/// Checks in flight right now. A check is a process group of its own, which the system
+	/// does not end with the app, so quitting has to end them itself.
+	public static func endRunningChecks() {
+		RunningChecks.shared.endAll()
+	}
+
+	public func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess {
+		try SpawnedServerProcess(plan)
+	}
+
+	public func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
+		let refused = plan.refusedSettings()
+
+		if !refused.isEmpty {
+			return .failed(
+				reason: "A .pc_env beside this config sets \(refused.joined(separator: ", ")), "
+					+ "which would leave the app unable to talk to the server"
+			)
+		}
+
+		let check: GroupedProcess
+		do {
+			check = try GroupedProcess.run(
+				executable: plan.executable,
+				arguments: plan.validationArguments,
+				workingDirectory: plan.workingDirectory,
+				environment: plan.environment(ProcessInfo.processInfo.environment)
+			)
+		} catch {
+			return .failed(reason: error.localizedDescription)
+		}
+
+		// The binary can be a script of the user's own, which can hang, wait on input that
+		// never comes, or leave a child holding the pipe, so reading is raced against the
+		// clock rather than trusted to finish.
+		// The check stays listed until it is over, cleanup included: a quit during the wait
+		// between SIGTERM and SIGKILL would otherwise find nothing to end.
+		checks.add(check)
+
+		let reader = Task {
+			await onItsOwnThread {
+				let printed = check.read()
+				check.waitUntilExit()
+
+				return printed
+			}
+		}
+
+		let printed = await withTaskCancellationHandler {
+			await Self.first(of: reader, within: validationTimeout)
+		} onCancel: {
+			check.signal(SIGTERM)
+		}
+
+		guard let printed else {
+			Task { [checks] in await Self.end(check, listedIn: checks) }
+
+			return .failed(reason: "The config check did not finish")
+		}
+
+		checks.remove(check)
+
+		guard check.reap() != 0 else { return .valid }
+
+		return .failed(reason: ServerValidation.reason(in: printed))
+	}
+
+	/// The reader's answer, or nothing once the wait is over. A task group would hold this
+	/// until every child returned, and the child reading the pipe is the one that hangs.
+	private static func first(
+		of reader: Task<String, Never>,
+		within timeout: Duration
+	) async -> String? {
+		let answer = FirstAnswer()
+
+		return await withCheckedContinuation { continuation in
+			Task {
+				answer.deliver(await reader.value, to: continuation)
+			}
+
+			Task {
+				try? await Task.sleep(for: timeout)
+				answer.deliver(nil, to: continuation)
+			}
+		}
+	}
+
+	/// A script that ignores SIGTERM, and whatever it started, still has to go. The status
+	/// is collected only once the last signal is out.
+	private static func end(_ check: GroupedProcess, listedIn checks: RunningChecks) async {
+		defer { checks.remove(check) }
+
+		check.signal(SIGTERM)
+
+		try? await Task.sleep(for: .seconds(1))
+
+		check.signal(SIGKILL)
+		check.reap()
+	}
+
+	public func isRunning(_ owner: ServerOwner) -> Bool {
+		owner.isRunning
+	}
+
+	public func isStackRunning(_ members: [Int32: Set<ServerOwner>]) -> Bool {
+		members.contains { group, identities in
+			identities.contains { $0.isRunning && UnixProcess.group(of: $0.pid) == group }
+		}
+	}
+
+	public func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)? {
+		guard let existing = GroupedProcess.adopt(group: group, members: members) else { return nil }
+
+		return AdoptedServerProcess(existing)
+	}
+}
+
+@MainActor
+final class SpawnedServerProcess: ServerProcess {
+	let output: AsyncStream<String>
+
+	private let check: GroupedProcess
+	private let exits: AsyncStream<Int32>
+
+	var pid: Int32 { check.pid }
+	var isRunning: Bool { check.hasMembers }
+	var membership: [Int32: Set<ServerOwner>] { check.membership }
+
+	init(_ plan: ServerLaunchPlan) throws {
+		// The binary can be a script that starts process-compose without replacing itself,
+		// and then the stack is a grandchild. A group of its own is what makes it reachable.
+		check = try GroupedProcess.run(
+			executable: plan.executable,
+			arguments: plan.arguments,
+			workingDirectory: plan.workingDirectory,
+			environment: plan.environment(ProcessInfo.processInfo.environment)
+		)
+
+		// A stack can print faster than the pane reads, and the log's own limit cannot hold
+		// back a queue in front of it. Each line is capped on the way in, so this count is a
+		// bound on bytes as well.
+		let (lines, lineFeed) = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(4096))
+		let (codes, codeFeed) = AsyncStream<Int32>.makeStream(bufferingPolicy: .bufferingNewest(1))
+
+		output = lines
+		exits = codes
+
+		let started = check
+
+		// On a thread of its own: reading a pipe and waiting for a process both block, and
+		// blocking inside a task holds one of the few threads the concurrency pool has. Enough
+		// of those and everything else on it stops, the tracking below included.
+		Thread.detachNewThread {
+			let buffer = LineBuffer()
+			started.drain { data in
+				for line in buffer.take(data) { lineFeed.yield(line) }
+			}
+
+			// A server that says why it is going and exits may not end that with a newline.
+			if let last = buffer.rest() { lineFeed.yield(last) }
+
+			lineFeed.finish()
+
+			started.waitUntilExit()
+			let status = started.reap()
+
+			// The wrapper can go before what it started, and the stack is only over once
+			// nothing in the group is left.
+			while started.hasMembers { usleep(50_000) }
+
+			codeFeed.yield(status)
+			codeFeed.finish()
+		}
+
+		// Draining blocks, so the services the leader starts are looked for beside it:
+		// closely at first, since a wrapper can be gone in milliseconds, then rarely.
+		Task.detached {
+			// A service is only visible while the process that started it is alive to point at
+			// it, and a wrapper can start one and exit within a few milliseconds, so the
+			// first moments are watched closely and the rest is not.
+			// A service is only visible while the process that started it is alive to point at
+			// it, and the kernel cannot report the fork itself: NOTE_TRACK answers ENOTSUP on
+			// macOS. So the first moments are watched closely and the rest is not.
+			let start = ContinuousClock.now
+			let tightly = start.advanced(by: .milliseconds(500))
+			let closely = start.advanced(by: .seconds(5))
+			let settled = start.advanced(by: .seconds(2))
+
+			while true {
+				started.track()
+
+				if !started.hasMembers, ContinuousClock.now >= settled { return }
+
+				let now = ContinuousClock.now
+				let interval: Duration =
+					now < tightly ? .milliseconds(5) : (now < closely ? .milliseconds(50) : .seconds(2))
+
+				try? await Task.sleep(for: interval)
+			}
+		}
+
+	}
+
+	func exitCode() async -> Int32 {
+		for await code in exits { return code }
+		return 0
+	}
+
+	func terminate() {
+		check.signal(SIGTERM, reach: .leader)
+	}
+
+	func kill() {
+		check.signal(SIGKILL, reach: .everything)
+	}
+}
+
+@MainActor
+final class AdoptedServerProcess: ServerProcess {
+	// The output of a server this app did not spawn went to the terminal that did.
+	let output = AsyncStream<String> { $0.finish() }
+
+	private let group: GroupedProcess
+	private let pollInterval: Duration
+
+	var pid: Int32 { group.pid }
+	var isRunning: Bool { group.hasMembers }
+	var membership: [Int32: Set<ServerOwner>] { group.membership }
+
+	init(_ group: GroupedProcess, pollInterval: Duration = .seconds(1)) {
+		self.group = group
+		self.pollInterval = pollInterval
+	}
+
+	/// A group this process never forked reports no status to it, so the end is only visible
+	/// as the last member going away.
+	func exitCode() async -> Int32 {
+		while isRunning {
+			group.track()
+
+			do {
+				try await Task.sleep(for: pollInterval, tolerance: pollInterval)
+			} catch {
+				return 0
+			}
+		}
+		return 0
+	}
+
+	func terminate() {
+		group.signal(SIGTERM, reach: .leader)
+	}
+
+	func kill() {
+		group.signal(SIGKILL, reach: .everything)
+	}
+}
+
+/// The checks running now, so a quit can take them with it.
+final class RunningChecks: @unchecked Sendable {
+	static let shared = RunningChecks()
+
+	private let lock = NSLock()
+	private var checks: [ObjectIdentifier: GroupedProcess] = [:]
+
+	func add(_ check: GroupedProcess) {
+		lock.lock()
+		defer { lock.unlock() }
+
+		checks[ObjectIdentifier(check)] = check
+	}
+
+	func remove(_ check: GroupedProcess) {
+		lock.lock()
+		defer { lock.unlock() }
+
+		checks[ObjectIdentifier(check)] = nil
+	}
+
+	func endAll() {
+		lock.lock()
+		let running = Array(checks.values)
+		checks = [:]
+		lock.unlock()
+
+		for check in running { check.signal(SIGKILL) }
+	}
+}
+
+extension ServerValidation {
+	/// process-compose reports the fault as its last log line: coloured, prefixed with a
+	/// timestamp and a level, and carrying the detail in an `error="..."` field.
+	static func reason(in output: String) -> String {
+		let lines = output
+			.split(whereSeparator: \.isNewline)
+			.map { LogLine(id: 0, spans: AnsiParser.spans(in: String($0))).text }
+			.filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+
+		guard let last = lines.last else { return "The config would not load" }
+
+		return message(in: last.trimmingCharacters(in: .whitespaces))
+	}
+
+	static func message(in line: String) -> String {
+		var text = Substring(line)
+
+		if let prefix = text.prefixMatch(of: /\d{2}-\d{2}-\d{2} [\d:.]+ [A-Z]{3}\s+/) {
+			text = text[prefix.range.upperBound...]
+		}
+
+		guard let detail = text.firstMatch(of: /\s*error="(.+)"\s*$/) else { return String(text) }
+
+		return text[..<detail.range.lowerBound] + ": " + detail.1
+	}
+}
+
+/// Runs blocking work away from the concurrency pool, whose threads are few and must not be
+/// held by a read that may never return.
+func onItsOwnThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+	await withCheckedContinuation { continuation in
+		Thread.detachNewThread { continuation.resume(returning: work()) }
+	}
+}
+
+/// Whichever of the reader and the clock answers first, once.
+private final class FirstAnswer: @unchecked Sendable {
+	private let lock = NSLock()
+	private var delivered = false
+
+	func deliver(
+		_ value: String?,
+		to continuation: CheckedContinuation<String?, Never>
+	) {
+		lock.lock()
+		let isFirst = !delivered
+		delivered = true
+		lock.unlock()
+
+		guard isFirst else { return }
+
+		continuation.resume(returning: value)
+	}
+}
+
+enum UnixProcess {
+	static func groups(under group: pid_t) -> [pid_t: Set<ServerOwner>] {
+		groups(from: [], groups: [group])
+	}
+
+	/// Every group reachable from the processes given, with the identities holding each. The
+	/// walk starts from named processes as well as whole groups, since a stack can move out
+	/// of the group it was started in and go on starting services from there.
+	///
+	/// Asking the kernel for one group, and for one process's children at a time, costs far
+	/// less than copying the whole process table, which matters because this runs on a timer.
+	static func groups(from seeds: Set<pid_t>, groups seedGroups: Set<pid_t>) -> [pid_t: Set<ServerOwner>] {
+		var found: [pid_t: Set<ServerOwner>] = [:]
+		var seen: Set<pid_t> = []
+		var pending: [pid_t] = []
+
+		func note(_ pid: pid_t) {
+			guard seen.insert(pid).inserted else { return }
+			guard let group = group(of: pid), let startedAt = startedAt(pid) else { return }
+
+			found[group, default: []].insert(ServerOwner(pid: pid, startedAt: startedAt))
+			pending.append(pid)
+		}
+
+		for group in seedGroups {
+			for pid in pids(inGroup: group) { note(pid) }
+		}
+
+		for pid in seeds { note(pid) }
+
+		while let parent = pending.popLast() {
+			for child in children(of: parent) { note(child) }
+		}
+
+		return found
+	}
+
+	static func pids(inGroup group: pid_t) -> [pid_t] {
+		list(PROC_PGRP_ONLY, group)
+	}
+
+	static func children(of pid: pid_t) -> [pid_t] {
+		list(PROC_PPID_ONLY, pid)
+	}
+
+	private static func list(_ kind: Int32, _ of: pid_t) -> [pid_t] {
+		let size = proc_listpids(UInt32(kind), UInt32(of), nil, 0)
+
+		guard size > 0 else { return [] }
+
+		var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.size)
+		let written = proc_listpids(UInt32(kind), UInt32(of), &pids, size)
+
+		guard written > 0 else { return [] }
+
+		return pids.prefix(Int(written) / MemoryLayout<pid_t>.size).filter { $0 > 0 }
+	}
+
+	static func isAlive(_ pid: Int32) -> Bool {
+		guard pid > 0 else { return false }
+		// A process owned by another user answers EPERM, which still means it is there.
+		return Darwin.kill(pid, 0) == 0 || errno == EPERM
+	}
+
+	/// The group a process is in now.
+	static func group(of pid: pid_t) -> pid_t? {
+		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+		var entry = kinfo_proc()
+		var size = MemoryLayout<kinfo_proc>.stride
+
+		guard sysctl(&request, UInt32(request.count), &entry, &size, nil, 0) == 0, size > 0 else {
+			return nil
+		}
+
+		return entry.kp_eproc.e_pgid
+	}
+
+	/// When the process began, in microseconds, or nothing when there is no such process.
+	static func startedAt(_ pid: pid_t) -> Int64? {
+		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+		var entry = kinfo_proc()
+		var size = MemoryLayout<kinfo_proc>.stride
+
+		guard sysctl(&request, UInt32(request.count), &entry, &size, nil, 0) == 0, size > 0 else {
+			return nil
+		}
+
+		let started = entry.kp_proc.p_un.__p_starttime
+
+		return Int64(started.tv_sec) * 1_000_000 + Int64(started.tv_usec)
+	}
+
+	static func name(of pid: Int32) -> String? {
+		var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))
+		let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+
+		guard length > 0 else { return nil }
+
+		let path = String(decoding: buffer.prefix(Int(length)), as: UTF8.self)
+
+		return URL(fileURLWithPath: path).lastPathComponent
+	}
+}
+
+/// Reassembles lines from pipe reads, which land on a background queue and split wherever
+/// the buffer happened to fill.
+private final class LineBuffer: @unchecked Sendable {
+	/// A process that writes a great deal without a newline, such as a progress bar, would
+	/// otherwise be held here in full.
+	static let longestLine = 1 << 20
+
+	private var pending = Data()
+	private let lock = NSLock()
+
+	/// What is left when there is no more to read: a line the writer never finished.
+	func rest() -> String? {
+		lock.lock()
+		defer { lock.unlock() }
+
+		guard !pending.isEmpty else { return nil }
+
+		let line = String(decoding: LogBuffer.head(of: Array(pending)), as: UTF8.self)
+		pending = Data()
+
+		return line.isEmpty ? nil : line
+	}
+
+	func take(_ data: Data) -> [String] {
+		lock.lock()
+		defer { lock.unlock() }
+
+		pending.append(data)
+
+		if pending.count > Self.longestLine {
+			pending.removeFirst(pending.count - Self.longestLine)
+		}
+
+		var lines: [String] = []
+		var start = pending.startIndex
+		while let newline = pending[start...].firstIndex(of: 0x0A) {
+			// Cut by bytes rather than characters: one character can carry any number of
+			// combining marks, so a character count is no bound on memory at all.
+			let line = Array(pending[start ..< newline])
+
+			lines.append(String(decoding: LogBuffer.head(of: line), as: UTF8.self))
+			start = pending.index(after: newline)
+		}
+		pending.removeSubrange(pending.startIndex ..< start)
+
+		return lines
+	}
+}

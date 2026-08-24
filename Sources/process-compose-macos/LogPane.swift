@@ -62,13 +62,26 @@ struct LogPane: View {
 	@ViewBuilder
 	private var output: some View {
 		if model.selected == nil {
-			Text("Select a process to read its output")
-				.font(.callout)
-				.foregroundStyle(.secondary)
-				.frame(maxWidth: .infinity, maxHeight: .infinity)
-				.background(Color(nsColor: .textBackgroundColor))
+			LogPlaceholder("Select a process to read its output")
 		} else {
 			LogTextView(lines: model.lines, fontSize: fontSize, isFollowing: model.isFollowing)
 		}
+	}
+}
+
+/// What a log pane shows in place of output.
+struct LogPlaceholder: View {
+	private let text: String
+
+	init(_ text: String) {
+		self.text = text
+	}
+
+	var body: some View {
+		Text(text)
+			.font(.callout)
+			.foregroundStyle(.secondary)
+			.frame(maxWidth: .infinity, maxHeight: .infinity)
+			.background(Color(nsColor: .textBackgroundColor))
 	}
 }
