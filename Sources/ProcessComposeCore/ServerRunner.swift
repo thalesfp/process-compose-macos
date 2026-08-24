@@ -232,11 +232,11 @@ final class SpawnedServerProcess: ServerProcess {
 	}
 
 	func terminate() {
-		check.signal(SIGTERM)
+		check.signal(SIGTERM, reach: .leader)
 	}
 
 	func kill() {
-		check.signal(SIGKILL)
+		check.signal(SIGKILL, reach: .everything)
 	}
 }
 
@@ -272,11 +272,11 @@ final class AdoptedServerProcess: ServerProcess {
 	}
 
 	func terminate() {
-		group.signal(SIGTERM)
+		group.signal(SIGTERM, reach: .leader)
 	}
 
 	func kill() {
-		group.signal(SIGKILL)
+		group.signal(SIGKILL, reach: .everything)
 	}
 }
 

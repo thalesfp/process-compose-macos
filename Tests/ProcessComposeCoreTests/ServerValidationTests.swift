@@ -485,7 +485,46 @@ struct ManagedGroupTests {
 
 		#expect(server.isRunning)
 
+		// SIGTERM is for the server to act on, and here there is no server left to act, so
+		// the service goes only when the shutdown is forced.
 		server.terminate()
+		server.kill()
+		await until { kill(service, 0) != 0 }
+
+		#expect(kill(service, 0) != 0)
+	}
+
+	@Test("leaves a managed service to the server to stop, until the shutdown is forced")
+	func leavesGracefulShutdownToTheServer() async throws {
+		let directory = try scratchDirectory("orderly")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// A server that takes its time stopping its service, as process-compose does when it
+		// runs shutdown commands in dependency order.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 30
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let service = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+		let leader = server.pid
+
+		await until { UnixProcess.groups(under: leader).keys.contains(service) }
+
+		server.terminate()
+		await until { !UnixProcess.isAlive(leader) }
+
+		// The server was asked to stop; the service it manages was not signalled behind it.
+		#expect(kill(service, 0) == 0)
+
+		server.kill()
 		await until { kill(service, 0) != 0 }
 
 		#expect(kill(service, 0) != 0)

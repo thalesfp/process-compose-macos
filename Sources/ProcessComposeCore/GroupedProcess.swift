@@ -244,7 +244,18 @@ final class GroupedProcess: @unchecked Sendable {
 	/// process-compose puts each process it runs in a group of its own, so its services are
 	/// not in this one. They are noted on the way past and signalled too, since by the time
 	/// the leader is gone nothing points at them any more.
-	func signal(_ number: Int32) {
+	/// How far a signal reaches.
+	enum Reach {
+		/// The launch group alone. process-compose runs its own shutdown for the services it
+		/// manages, in its own order and with its own timeouts, and signalling them here
+		/// would end them before it had the chance.
+		case leader
+		/// Everything seen: the launch group, and each service with the group it leads. This
+		/// is for after the orderly shutdown has had its time and not taken it.
+		case everything
+	}
+
+	func signal(_ number: Int32, reach: Reach = .everything) {
 		noteManagedGroups(force: true)
 
 		lock.lock()
@@ -254,14 +265,18 @@ final class GroupedProcess: @unchecked Sendable {
 
 		let live = liveMembers()
 
-		// Each member itself and the group it leads: a service remembered from before it
-		// moved into a group of its own would be missed by a signal to that old group.
-		for member in live {
-			kill(member.pid, number)
-			kill(-member.pid, number)
-		}
+		if reach == .everything {
+			// Each member itself and the group it leads: a service remembered from before it
+			// moved into a group of its own would be missed by a signal to that old group.
+			for member in live {
+				kill(member.pid, number)
+				kill(-member.pid, number)
+			}
 
-		for group in liveGroups() { kill(-group, number) }
+			for group in liveGroups() { kill(-group, number) }
+		} else {
+			kill(-pid, number)
+		}
 
 		if live.isEmpty { finished = true }
 	}
