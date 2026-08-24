@@ -104,12 +104,20 @@ private final class Answer: @unchecked Sendable {
 }
 
 /// The script records its child as it starts, which under load can be after the check that
-/// spawned it has already been given up on.
+/// spawned it has already been given up on. The file appears before it holds the number, so
+/// what is waited for is a number.
 private func recordedChild(in file: URL) async throws -> String {
-	await until { FileManager.default.fileExists(atPath: file.path) }
+	await until { pid(in: file) != nil }
 
-	return try String(contentsOf: file, encoding: .utf8)
-		.trimmingCharacters(in: .whitespacesAndNewlines)
+	guard let recorded = pid(in: file) else { return "" }
+
+	return String(recorded)
+}
+
+private func pid(in file: URL) -> pid_t? {
+	guard let text = try? String(contentsOf: file, encoding: .utf8) else { return nil }
+
+	return pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
 private func until(_ condition: @Sendable () -> Bool, within limit: Duration = .seconds(10)) async {
@@ -418,13 +426,15 @@ struct ManagedGroupTests {
 		let directory = try scratchDirectory("vanishing")
 		defer { try? FileManager.default.removeItem(at: directory) }
 
-		// The leader starts a service in a group of its own, with its own output, and goes.
-		// Nothing links the two once it has, so it has to have been seen beforehand.
+		// A launcher that starts its services in groups of their own, with their own output,
+		// and then goes. Nothing links the two once it has, so they have to have been seen
+		// while it was still there.
 		let plan = try wrapper(
 			in: directory,
 			"""
 			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
+			sleep 0.5
 			"""
 		)
 
@@ -466,7 +476,7 @@ struct ManagedGroupTests {
 		)
 
 		let launch = server.pid
-		await until { UnixProcess.descendantGroups(of: launch).contains(service) }
+		await until { UnixProcess.groups(under: launch).keys.contains(service) }
 
 		server.kill()
 		await until { kill(service, 0) != 0 }

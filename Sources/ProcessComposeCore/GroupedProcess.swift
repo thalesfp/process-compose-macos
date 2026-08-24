@@ -13,7 +13,7 @@ final class GroupedProcess: @unchecked Sendable {
 	private var finished = false
 	/// Each managed group with the identities of the members it was seen holding. A group id
 	/// is reused once its group is gone, so a member has to still be the one that was noted.
-	private var managed: [pid_t: [ServerOwner]] = [:]
+	private var known: [pid_t: Set<ServerOwner>] = [:]
 	private var notedAt: UInt64 = 0
 
 	private let isOurs: Bool
@@ -22,6 +22,11 @@ final class GroupedProcess: @unchecked Sendable {
 		self.pid = pid
 		self.output = output
 		self.isOurs = isOurs
+
+		known = UnixProcess.groups(under: pid)
+		if known[pid] == nil, let started = UnixProcess.startedAt(pid) {
+			known[pid] = [ServerOwner(pid: pid, startedAt: started)]
+		}
 	}
 
 	enum SpawnFailure: Error, LocalizedError {
@@ -123,18 +128,13 @@ final class GroupedProcess: @unchecked Sendable {
 
 	/// Whether anything in the group is still there. A wrapper that starts the server and
 	/// exits leaves the work behind it, so the leader going is not the group going.
+	/// Whether anything the app started is still there. The launch group's own number is
+	/// not enough: it is handed out again once the group is gone.
 	var hasMembers: Bool {
-		if kill(-pid, 0) == 0 {
-			// Noted while the leader is alive, since once it goes nothing points at the
-			// groups it started, and it can go without ever being signalled.
-			noteManagedGroups()
-			return true
-		}
-
 		lock.lock()
 		defer { lock.unlock() }
 
-		return !liveManagedGroups().isEmpty
+		return !liveMembers().isEmpty
 	}
 
 	/// Whether the child is over, without reaping it.
@@ -170,6 +170,8 @@ final class GroupedProcess: @unchecked Sendable {
 		noteManagedGroups(force: true)
 	}
 
+
+
 	// Walking the process table is not free, so it is walked at most twice a second while
 	// the leader lives.
 	private func noteManagedGroups(force: Bool = false) {
@@ -182,11 +184,11 @@ final class GroupedProcess: @unchecked Sendable {
 
 		guard due else { return }
 
-		let found = UnixProcess.descendants(of: pid)
+		let found = UnixProcess.groups(under: pid)
 
 		lock.lock()
 		for (group, members) in found {
-			managed[group, default: []].append(contentsOf: members)
+			known[group, default: []].formUnion(members)
 		}
 		lock.unlock()
 	}
@@ -250,26 +252,50 @@ final class GroupedProcess: @unchecked Sendable {
 
 		guard !finished else { return }
 
-		let live = liveManagedGroups()
+		let live = liveMembers()
 
-		let ours = kill(-pid, 0) == 0
+		// Each member itself and the group it leads: a service remembered from before it
+		// moved into a group of its own would be missed by a signal to that old group.
+		for member in live {
+			kill(member.pid, number)
+			kill(-member.pid, number)
+		}
 
-		if ours { kill(-pid, number) }
+		for group in liveGroups() { kill(-group, number) }
 
-		for group in live { kill(-group, number) }
-
-		if !ours, live.isEmpty { finished = true }
+		if live.isEmpty { finished = true }
 	}
 
-	/// The managed groups still holding a member this process saw them hold.
-	private func liveManagedGroups() -> [pid_t] {
+	/// Everything seen under the launch group that is still the process it was. The kernel
+	/// cannot report forks here, since NOTE_TRACK is not supported on macOS, so this is what
+	/// the walks of the process table have found.
+	private func liveMembers() -> Set<ServerOwner> {
+		var live: Set<ServerOwner> = []
+
+		for (group, members) in known {
+			let running = members.filter(\.isRunning)
+
+			if running.isEmpty {
+				known[group] = nil
+			} else {
+				live.formUnion(running)
+			}
+		}
+
+		return live
+	}
+
+	/// The groups still holding a member this process saw them hold, the launch group
+	/// included. A group whose members have all gone is forgotten, since its number is then
+	/// free for something else to be given.
+	private func liveGroups() -> [pid_t] {
 		var live: [pid_t] = []
 
-		for (group, members) in managed {
+		for (group, members) in known {
 			if members.contains(where: \.isRunning) {
 				live.append(group)
 			} else {
-				managed[group] = nil
+				known[group] = nil
 			}
 		}
 

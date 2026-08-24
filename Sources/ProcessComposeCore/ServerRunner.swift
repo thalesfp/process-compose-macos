@@ -183,15 +183,28 @@ final class SpawnedServerProcess: ServerProcess {
 		// Draining blocks, so the services the leader starts are looked for beside it:
 		// closely at first, since a wrapper can be gone in milliseconds, then rarely.
 		Task.detached {
-			let closely = ContinuousClock.now.advanced(by: .seconds(5))
+			// A service is only visible while the process that started it is alive to point at
+			// it, and a wrapper can start one and exit within a few milliseconds, so the
+			// first moments are watched closely and the rest is not.
+			// A service is only visible while the process that started it is alive to point at
+			// it, and the kernel cannot report the fork itself: NOTE_TRACK answers ENOTSUP on
+			// macOS. So the first moments are watched closely and the rest is not.
+			let start = ContinuousClock.now
+			let tightly = start.advanced(by: .milliseconds(500))
+			let closely = start.advanced(by: .seconds(5))
+			let settled = start.advanced(by: .seconds(2))
 
-			repeat {
+			while true {
 				started.track()
 
-				let interval: Duration = ContinuousClock.now < closely ? .milliseconds(50) : .seconds(2)
+				if !started.hasMembers, ContinuousClock.now >= settled { return }
+
+				let now = ContinuousClock.now
+				let interval: Duration =
+					now < tightly ? .milliseconds(5) : (now < closely ? .milliseconds(50) : .seconds(2))
 
 				try? await Task.sleep(for: interval)
-			} while started.hasMembers
+			}
 		}
 
 		Task.detached {
@@ -247,6 +260,8 @@ final class AdoptedServerProcess: ServerProcess {
 	/// as the last member going away.
 	func exitCode() async -> Int32 {
 		while isRunning {
+			group.track()
+
 			do {
 				try await Task.sleep(for: pollInterval, tolerance: pollInterval)
 			} catch {
@@ -371,12 +386,10 @@ enum UnixProcess {
 
 	/// The groups of everything the group's processes started. process-compose gives each
 	/// service a group of its own, and once its leader is gone nothing links them back.
-	static func descendantGroups(of group: pid_t) -> Set<pid_t> {
-		Set(descendants(of: group).keys)
-	}
-
-	/// Each group started under this one, with the identity of the members holding it.
-	static func descendants(of group: pid_t) -> [pid_t: [ServerOwner]] {
+	/// Every group under this one, the group itself included, with the identities of the
+	/// members holding each. An identity is a pid and the moment it began, which is what
+	/// separates a group from a later one that reuses its number.
+	static func groups(under group: pid_t) -> [pid_t: Set<ServerOwner>] {
 		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
 		var size = 0
 
@@ -392,28 +405,33 @@ enum UnixProcess {
 		var children: [pid_t: [kinfo_proc]] = [:]
 		for entry in all { children[entry.kp_eproc.e_ppid, default: []].append(entry) }
 
-		var groups: [pid_t: [ServerOwner]] = [:]
-		var pending = all.filter { $0.kp_eproc.e_pgid == group }.map(\.kp_proc.p_pid)
-		var seen: Set<pid_t> = Set(pending)
+		var groups: [pid_t: Set<ServerOwner>] = [:]
+		var pending: [pid_t] = []
+		var seen: Set<pid_t> = []
 
-		while let parent = pending.popLast() {
-			for child in children[parent] ?? [] {
-				let pid = child.kp_proc.p_pid
+		func note(_ entry: kinfo_proc) {
+			let started = entry.kp_proc.p_un.__p_starttime
 
-				guard seen.insert(pid).inserted else { continue }
-
-				let started = child.kp_proc.p_un.__p_starttime
-				let owner = ServerOwner(
-					pid: pid,
+			groups[entry.kp_eproc.e_pgid, default: []].insert(
+				ServerOwner(
+					pid: entry.kp_proc.p_pid,
 					startedAt: Int64(started.tv_sec) * 1_000_000 + Int64(started.tv_usec)
 				)
-
-				groups[child.kp_eproc.e_pgid, default: []].append(owner)
-				pending.append(pid)
-			}
+			)
 		}
 
-		groups[group] = nil
+		for entry in all where entry.kp_eproc.e_pgid == group {
+			note(entry)
+			seen.insert(entry.kp_proc.p_pid)
+			pending.append(entry.kp_proc.p_pid)
+		}
+
+		while let parent = pending.popLast() {
+			for child in children[parent] ?? [] where seen.insert(child.kp_proc.p_pid).inserted {
+				note(child)
+				pending.append(child.kp_proc.p_pid)
+			}
+		}
 
 		return groups
 	}
