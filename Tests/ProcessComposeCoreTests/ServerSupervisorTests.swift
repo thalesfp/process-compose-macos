@@ -655,6 +655,29 @@ struct ServerSupervisorTests {
 		#expect(records.record == record)
 	}
 
+	@Test("still takes down a server it could not record when the app quits at once")
+	func stopsAnUnrecordedServerOnQuit() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		runner.ignoresKill = true
+		let records = MemoryRecordStore()
+		records.savingFails = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			grace: .milliseconds(50)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		// The record failed and the stack would not stop, so it is still the app's to stop.
+		supervisor.stopOnQuit()
+
+		#expect(runner.started?.didTerminate == true)
+		#expect(runner.started?.didKill == true)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

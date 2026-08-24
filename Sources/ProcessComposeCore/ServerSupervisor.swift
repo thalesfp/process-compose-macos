@@ -412,33 +412,33 @@ public final class ServerSupervisor {
 		do {
 			let started = try runner.run(plan)
 
-			do {
-				try records.save(
-					ServerRecord(
-						group: started.pid,
-						port: plan.port,
-						owner: owner,
-						members: started.membership
-					)
-				)
-			} catch {
-				started.terminate()
-				await waitForExit(of: started)
-				if started.isRunning { started.kill() }
+			// Held from the moment it exists, so a quit in the next instant still finds it.
+			server = started
+			watch(started)
 
-				state = .failed(reason: "Could not record the server: \(error.localizedDescription)")
-				return
-			}
-
-			record = ServerRecord(
+			let mine = ServerRecord(
 				group: started.pid,
 				port: plan.port,
 				owner: owner,
 				members: started.membership
 			)
-			server = started
+
+			do {
+				try records.save(mine)
+			} catch {
+				let failure = "Could not record the server: \(error.localizedDescription)"
+
+				await shutDown()
+
+				// A stack that would not stop has its own answer, which is the one to keep.
+				if case .failed = state { return }
+
+				state = .failed(reason: failure)
+				return
+			}
+
+			record = mine
 			state = .running(owned: true)
-			watch(started)
 			_ = claim
 		} catch {
 			state = .failed(reason: error.localizedDescription)
