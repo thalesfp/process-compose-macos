@@ -169,6 +169,13 @@ public final class ServerSupervisor {
 			return
 		}
 
+		// A server this app started and is still holding stays its own, whatever a probe says
+		// at this moment: a stack that is slow to answer is not a stack that is not ours.
+		if let server, server.isRunning {
+			state = .running(owned: true)
+			return
+		}
+
 		let presence = await reachability.look(at: address)
 
 		guard isCurrent(mine) else { return }

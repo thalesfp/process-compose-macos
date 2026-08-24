@@ -811,6 +811,26 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state == .running(owned: true))
 	}
 
+	@Test("keeps a running server of its own through a port that answers strangely")
+	func keepsItsServerThroughAnOddAnswer() async {
+		let runner = FakeRunner()
+		let reachability = FakeReachability(.nothing)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: reachability,
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		// The stack is up but answering oddly for a moment, as one does while it starts.
+		reachability.presence = .occupied
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(supervisor.isOwned)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
