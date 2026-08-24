@@ -317,6 +317,23 @@ struct ServerRecordStoreTests {
 		#expect(store.claimLaunch(port: 28080) != nil)
 	}
 
+	@Test("refuses to write over records it cannot read")
+	func refusesToWriteOverUnreadableRecords() throws {
+		let directory = try scratchDirectory("unreadable")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let file = directory.appendingPathComponent("server.json")
+		let store = FileServerRecordStore(url: file)
+		try "not json at all".write(to: file, atomically: true, encoding: .utf8)
+
+		#expect(throws: FileServerRecordStore.Fault.self) {
+			try store.save(ServerRecord(group: 100, port: 28080, owner: ServerOwner(pid: 900, startedAt: 1)))
+		}
+
+		// The stacks named in it are still named in it.
+		#expect(try String(contentsOf: file, encoding: .utf8) == "not json at all")
+	}
+
 	@Test("keeps a record another copy of the app wrote in its place")
 	func clearsOnlyItsOwnRecord() throws {
 		let directory = try scratchDirectory("records")

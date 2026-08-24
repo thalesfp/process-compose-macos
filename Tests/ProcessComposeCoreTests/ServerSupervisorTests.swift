@@ -849,6 +849,31 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state == .idle)
 	}
 
+	@Test("a typed address the app cannot use does not stop the running stack")
+	func keepsTheStackThroughAnUnusableAddress() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		let started = runner.started
+
+		await supervisor.use(address: nil, plan: .test)
+
+		#expect(started?.didTerminate == false)
+		#expect(supervisor.state == .unconfigured)
+
+		// And the stack is still there to come back to.
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.launched.count == 1)
+		#expect(supervisor.state == .running(owned: true))
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

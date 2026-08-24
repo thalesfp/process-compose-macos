@@ -110,14 +110,28 @@ public struct FileServerRecordStore: ServerRecordStore {
 			.appendingPathComponent("server.json")
 	}
 
-	public func load(port: Int) -> ServerRecord? {
-		all()[String(port)]
+	public enum Fault: Error, LocalizedError {
+		case unreadable
+
+		public var errorDescription: String? {
+			"The file recording the servers could not be read"
+		}
 	}
 
-	private func all() -> [String: ServerRecord] {
+	public func load(port: Int) -> ServerRecord? {
+		(try? all())?[String(port)]
+	}
+
+	/// Throws rather than starting again from nothing: the file holds the records of every
+	/// port, and writing over one that cannot be read would lose the stacks named in it.
+	private func all() throws -> [String: ServerRecord] {
 		guard let data = try? Data(contentsOf: url) else { return [:] }
 
-		return (try? JSONDecoder().decode([String: ServerRecord].self, from: data)) ?? [:]
+		do {
+			return try JSONDecoder().decode([String: ServerRecord].self, from: data)
+		} catch {
+			throw Fault.unreadable
+		}
 	}
 
 	public func save(_ record: ServerRecord) throws {
@@ -127,7 +141,7 @@ public struct FileServerRecordStore: ServerRecordStore {
 		)
 
 		try holdingTheLock {
-			var records = all()
+			var records = try all()
 			records[String(record.port)] = record
 
 			try JSONEncoder().encode(records).write(to: url, options: .atomic)
@@ -139,7 +153,7 @@ public struct FileServerRecordStore: ServerRecordStore {
 	/// removing happen under one lock, or another copy could save between them.
 	public func clear(_ record: ServerRecord) throws {
 		try holdingTheLock {
-			var records = all()
+			var records = try all()
 
 			guard records[String(record.port)] == record else { return }
 

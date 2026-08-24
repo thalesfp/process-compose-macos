@@ -156,19 +156,22 @@ public final class ServerSupervisor {
 
 		guard isCurrent(mine) else { return }
 
-		if wanted.address != address || wanted.plan != plan {
+		// Settings can be given an address the app cannot use. That is a typo, not a decision
+		// to stop a running stack, so the server is left where it is and only the window says
+		// there is nothing to talk to.
+		guard let address = wanted.address else {
+			state = .unconfigured
+			return
+		}
+
+		if address != self.address || wanted.plan != plan {
 			await stop()
 
 			guard isCurrent(mine) else { return }
 		}
 
-		address = wanted.address
+		self.address = address
 		plan = wanted.plan
-
-		guard let address = wanted.address else {
-			state = .unconfigured
-			return
-		}
 
 		// A server this app started and is still holding stays its own, whatever a probe says
 		// at this moment: a stack that is slow to answer is not a stack that is not ours.
