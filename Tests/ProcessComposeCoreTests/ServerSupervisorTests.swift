@@ -704,6 +704,33 @@ struct ServerSupervisorTests {
 		#expect(runner.started !== first)
 	}
 
+	@Test("asking again for what is already running starts nothing more")
+	func joinsARequestAlreadyUnderWay() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		let started = runner.started
+
+		// A second window, or the same one rebuilt, asking for exactly the same thing.
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.launched.count == 1)
+		#expect(runner.started === started)
+		#expect(supervisor.state == .running(owned: true))
+	}
+
+	@Test("an identity that cannot be read is never taken for a running process")
+	func unreadableIdentityIsNeverRunning() {
+		#expect(ServerOwner(pid: ProcessInfo.processInfo.processIdentifier, startedAt: 0).isRunning == false)
+		#expect(ServerOwner.current.isRunning)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

@@ -122,6 +122,15 @@ public final class ServerSupervisor {
 
 		guard !Task.isCancelled else { return }
 
+		// The window can ask again for what it already asked for, when it is rebuilt or a
+		// second one opens. Joining what is already under way is what keeps that from
+		// retiring a request that is still deciding.
+		if address == self.address, plan == self.plan, server != nil || launchTask != nil {
+			if let launchTask { await launchTask.value }
+
+			return
+		}
+
 		if address != self.address || plan != self.plan {
 			await stop()
 

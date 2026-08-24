@@ -21,9 +21,12 @@ public struct ServerOwner: Codable, Sendable, Hashable {
 		return ServerOwner(pid: pid, startedAt: UnixProcess.startedAt(pid) ?? 0)
 	}
 
-	/// Whether this is still the running process it was written for.
+	/// Whether this is still the running process it was written for. An identity that could
+	/// not be read is no identity: it never matches, so nothing is signalled on its word.
 	public var isRunning: Bool {
-		UnixProcess.startedAt(pid) == startedAt
+		guard startedAt != 0, let now = UnixProcess.startedAt(pid) else { return false }
+
+		return now == startedAt
 	}
 }
 
