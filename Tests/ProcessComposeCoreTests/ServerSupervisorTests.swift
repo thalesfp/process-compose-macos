@@ -176,7 +176,7 @@ struct ServerSupervisorTests {
 	}
 
 	@Test("starts nothing for inputs the user has already replaced")
-	func ignoresACancelledProbe() async {
+	func ignoresASupersededRequest() async {
 		let runner = FakeRunner()
 		let probe = SlowReachability()
 		let supervisor = ServerSupervisor(
@@ -185,12 +185,15 @@ struct ServerSupervisorTests {
 			records: MemoryRecordStore()
 		)
 
-		let probing = Task { await supervisor.use(address: .standard, plan: .test) }
+		let first = Task { await supervisor.use(address: .standard, plan: .test) }
 		await until { probe.didStart }
-		probing.cancel()
-		await probing.value
 
-		#expect(runner.launched.isEmpty)
+		// The settings move on while the first request is still looking at the port.
+		probe.answerNow()
+		await supervisor.use(address: .standard, plan: .other)
+		await first.value
+
+		#expect(runner.launched == [.other])
 	}
 
 	@Test("offers to start again once a server it attached to is gone")
@@ -757,6 +760,30 @@ struct ServerSupervisorTests {
 		#expect(runner.launched == [.test])
 	}
 
+	@Test("finishes a launch even when whoever asked for it has gone")
+	func finishesALaunchItsCallerAbandoned() async {
+		let runner = FakeRunner()
+		let probe = SlowReachability()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: probe,
+			records: MemoryRecordStore()
+		)
+
+		// Two windows asking for the same thing; the second goes away mid-probe.
+		let first = Task { await supervisor.use(address: .standard, plan: .test) }
+		await until { probe.didStart }
+		let second = Task { await supervisor.use(address: .standard, plan: .test) }
+		second.cancel()
+
+		probe.answerNow()
+		await first.value
+		await second.value
+
+		#expect(runner.launched == [.test])
+		#expect(supervisor.state == .running(owned: true))
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -795,6 +822,12 @@ extension ServerOwner {
 }
 
 extension ServerLaunchPlan {
+	fileprivate static let other = ServerLaunchPlan(
+		executablePath: "/opt/homebrew/bin/process-compose",
+		configurationPath: "/Users/dev/other/process-compose.yaml",
+		port: 28080
+	)!
+
 	fileprivate static let test = ServerLaunchPlan(
 		executablePath: "/opt/homebrew/bin/process-compose",
 		configurationPath: "/Users/dev/stack/process-compose.yaml",
@@ -818,12 +851,42 @@ private final class FakeReachability: ServerReachability, @unchecked Sendable {
 
 /// Stands in for a probe still waiting on the network when its inputs change.
 private final class SlowReachability: ServerReachability, @unchecked Sendable {
-	private(set) var didStart = false
+	private let lock = NSLock()
+	private var started = false
+	private var released = false
+
+	var didStart: Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return started
+	}
+
+	func answerNow() {
+		lock.lock()
+		released = true
+		lock.unlock()
+	}
 
 	func look(at address: ServerAddress) async -> ServerPresence {
-		didStart = true
-		try? await Task.sleep(for: .seconds(30))
+		begin()
+
+		while !isReleased {
+			try? await Task.sleep(for: .milliseconds(10))
+		}
+
 		return .nothing
+	}
+
+	private var isReleased: Bool {
+		lock.lock()
+		defer { lock.unlock() }
+		return released
+	}
+
+	private func begin() {
+		lock.lock()
+		started = true
+		lock.unlock()
 	}
 }
 

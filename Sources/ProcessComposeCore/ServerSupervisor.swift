@@ -72,6 +72,8 @@ public final class ServerSupervisor {
 	private var watchTask: Task<Void, Never>?
 	private var stopTask: Task<Void, Never>?
 	private var launchTask: Task<Void, Never>?
+	private var useTask: Task<Void, Never>?
+	private var useInputs: Inputs?
 	private var record: ServerRecord?
 	private var plan: ServerLaunchPlan?
 	private var address: ServerAddress?
@@ -109,43 +111,55 @@ public final class ServerSupervisor {
 		}
 	}
 
+	/// What the window is asking for.
+	private struct Inputs: Equatable {
+		let address: ServerAddress?
+		let plan: ServerLaunchPlan?
+	}
+
 	/// Points the supervisor at the server the rest of the app is talking to. A changed
 	/// address or plan retires the server started for the previous one.
+	///
+	/// The work is held by the supervisor rather than by whoever asked for it: a window
+	/// being rebuilt or closed must not abandon a launch half way, and asking again for what
+	/// is already being done joins it rather than starting it over.
 	public func use(address: ServerAddress?, plan: ServerLaunchPlan?) async {
-		// Stopping a server is the first thing this does, so a request already abandoned
-		// must not get that far.
-		guard !Task.isCancelled else { return }
+		let wanted = Inputs(address: address, plan: plan)
 
-		// A shutdown can take a minute, and the settings can come back to where they started
-		// in that time. Waiting here is what keeps the two from overlapping.
-		if let stopTask { await stopTask.value }
-
-		guard !Task.isCancelled else { return }
-
-		// The window can ask again for what it already asked for, when it is rebuilt or a
-		// second one opens. Joining what is already under way is what keeps that from
-		// retiring a request that is still deciding.
-		if address == self.address, plan == self.plan, server != nil || launchTask != nil {
-			if let launchTask { await launchTask.value }
-
+		if let useTask, useInputs == wanted {
+			await useTask.value
 			return
-		}
-
-		if address != self.address || plan != self.plan {
-			await stop()
-
-			// Waiting out a shutdown takes long enough for newer settings to arrive, and
-			// this request must not put its own back over them.
-			guard !Task.isCancelled else { return }
 		}
 
 		generation += 1
 		let mine = generation
+		useInputs = wanted
 
-		self.address = address
-		self.plan = plan
+		let work = Task { await self.apply(wanted, generation: mine) }
+		useTask = work
 
-		guard let address else {
+		await work.value
+
+		if useInputs == wanted { useTask = nil }
+	}
+
+	private func apply(_ wanted: Inputs, generation mine: Int) async {
+		// A shutdown can take a minute, and the settings can come back to where they started
+		// in that time. Waiting here is what keeps the two from overlapping.
+		if let stopTask { await stopTask.value }
+
+		guard isCurrent(mine) else { return }
+
+		if wanted.address != address || wanted.plan != plan {
+			await stop()
+
+			guard isCurrent(mine) else { return }
+		}
+
+		address = wanted.address
+		plan = wanted.plan
+
+		guard let address = wanted.address else {
 			state = .unconfigured
 			return
 		}
@@ -170,7 +184,7 @@ public final class ServerSupervisor {
 			return
 		}
 
-		guard let plan else {
+		guard let plan = wanted.plan else {
 			state = .unconfigured
 			return
 		}
@@ -284,7 +298,7 @@ public final class ServerSupervisor {
 	/// Settings writes a preference per keystroke, so a probe can still be in flight when
 	/// the inputs behind it are gone. Its answer must not start a server for them.
 	private func isCurrent(_ mine: Int) -> Bool {
-		!Task.isCancelled && mine == generation
+		mine == generation
 	}
 
 	/// `held` is the claim the caller already has, if any.
