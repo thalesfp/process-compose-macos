@@ -5,6 +5,7 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 	public let executable: URL
 	public let configuration: URL
 	public let workingDirectory: URL
+	public let host: String
 	public let port: Int
 
 	/// A config's `working_dir` and `watch` paths resolve against the directory
@@ -13,6 +14,7 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 		executablePath: String,
 		configurationPath: String,
 		workingDirectoryPath: String = "",
+		host: String = ServerAddress.defaultHost,
 		port: Int
 	) {
 		let executable = executablePath.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -26,6 +28,7 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 		self.workingDirectory = workingDirectory.isEmpty
 			? Self.url(configuration).deletingLastPathComponent()
 			: URL(fileURLWithPath: (workingDirectory as NSString).expandingTildeInPath, isDirectory: true)
+		self.host = host
 		self.port = port
 	}
 
@@ -33,9 +36,15 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 		URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: false)
 	}
 
-	/// `--detached` forks and returns, while `-t=false` keeps a live child to signal.
+	/// `--detached` forks and returns, while `-t=false` keeps a live child to signal. The
+	/// address is named rather than left to `PC_ADDRESS`, which the environment can set to
+	/// one that answers the whole network.
 	public var arguments: [String] {
-		["up", "-f", configuration.path, "-p", "\(port)", "-t=false", "--keep-project"]
+		[
+			"up", "-f", configuration.path,
+			"--address", host, "-p", "\(port)",
+			"-t=false", "--keep-project",
+		]
 	}
 
 	/// Loads the config, reports what is wrong with it, and exits without running anything.

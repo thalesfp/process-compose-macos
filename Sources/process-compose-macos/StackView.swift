@@ -242,6 +242,7 @@ struct StackView: View {
 			executablePath: binaryPath,
 			configurationPath: configPath,
 			workingDirectoryPath: workingDirectory,
+			host: host,
 			port: port
 		)
 	}

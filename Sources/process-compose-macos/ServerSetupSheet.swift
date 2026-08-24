@@ -102,6 +102,7 @@ struct ServerSetupSheet: View {
 			executablePath: draftBinary,
 			configurationPath: draftConfig,
 			workingDirectoryPath: draftWorkingDirectory,
+			host: PreferenceDefault.host,
 			port: port
 		)
 	}

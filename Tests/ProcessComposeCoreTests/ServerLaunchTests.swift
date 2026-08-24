@@ -17,10 +17,30 @@ struct ServerLaunchTests {
 		#expect(
 			plan.arguments == [
 				"up", "-f", "/Users/dev/stack/process-compose.yaml",
-				"-p", "28080", "-t=false", "--keep-project",
+				"--address", "localhost", "-p", "28080",
+				"-t=false", "--keep-project",
 			]
 		)
 		#expect(plan.workingDirectory.path == "/Users/dev/stack")
+	}
+
+	@Test("names the address, so the environment cannot open the server to the network")
+	func namesTheAddress() throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				host: "localhost",
+				port: 28080
+			)
+		)
+
+		// PC_ADDRESS is what process-compose reads when no address is given.
+		let environment = plan.environment(["PC_ADDRESS": "0.0.0.0"])
+
+		#expect(plan.arguments.contains("--address"))
+		#expect(plan.arguments.firstIndex(of: "--address").map { plan.arguments[$0 + 1] } == "localhost")
+		#expect(environment["PC_ADDRESS"] == "0.0.0.0")
 	}
 
 	@Test("refuses a plan without a config file")
