@@ -545,6 +545,27 @@ struct ServerSupervisorTests {
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
 	}
 
+	@Test("starts nothing beside a recorded stack it cannot take over")
+	func refusesToLaunchBesideARecordedStack() async {
+		let runner = FakeRunner()
+		// The group is alive, but nothing in it is recognised, so it cannot be adopted.
+		runner.liveGroups = [4242]
+		let record = ServerRecord(group: 4242, port: 28080, owner: .test(900))
+		let records = MemoryRecordStore(record: record)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			owner: .test(901)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.launched.isEmpty)
+		#expect(records.record == record)
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -618,6 +639,7 @@ private final class FakeRunner: ServerRunner {
 	var failure: (any Error)?
 	var validation: ServerValidation = .valid
 	var liveOwners: Set<ServerOwner> = []
+	var liveGroups: Set<Int32> = []
 	private(set) var adoptedWith: Set<String> = []
 	var ignoresTerminate = false
 	var ignoresKill = false
@@ -650,6 +672,10 @@ private final class FakeRunner: ServerRunner {
 
 	func isRunning(_ owner: ServerOwner) -> Bool {
 		liveOwners.contains(owner)
+	}
+
+	func isGroupRunning(_ group: Int32) -> Bool {
+		liveGroups.contains(group)
 	}
 }
 

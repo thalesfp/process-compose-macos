@@ -342,6 +342,15 @@ public final class ServerSupervisor {
 			}
 
 			if takeOver(port: plan.port, under: claim) { return }
+
+			// The recorded stack is still there but could not be taken over. Starting a
+			// second one would replace the only record that can still find the first.
+			if runner.isGroupRunning(recorded.group) {
+				state = .failed(
+					reason: "A server is already running on port \(plan.port) that this app cannot take over"
+				)
+				return
+			}
 		}
 
 		do {

@@ -28,6 +28,8 @@ public protocol ServerRunner {
 	/// holds processes none of `names` describes.
 	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)?
 	func isRunning(_ owner: ServerOwner) -> Bool
+	/// Whether anything of a recorded group is left, without taking it over.
+	func isGroupRunning(_ group: Int32) -> Bool
 }
 
 public struct LiveServerRunner: ServerRunner {
@@ -134,6 +136,10 @@ public struct LiveServerRunner: ServerRunner {
 
 	public func isRunning(_ owner: ServerOwner) -> Bool {
 		owner.isRunning
+	}
+
+	public func isGroupRunning(_ group: Int32) -> Bool {
+		group > 0 && Darwin.kill(-group, 0) == 0
 	}
 
 	public func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
@@ -351,24 +357,28 @@ enum UnixProcess {
 	/// The groups of everything the group's processes started. process-compose gives each
 	/// service a group of its own, and once its leader is gone nothing links them back.
 	static func descendantGroups(of group: pid_t) -> Set<pid_t> {
+		Set(descendants(of: group).keys)
+	}
+
+	/// Each group started under this one, with the identity of the members holding it.
+	static func descendants(of group: pid_t) -> [pid_t: [ServerOwner]] {
 		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
 		var size = 0
 
 		guard sysctl(&request, UInt32(request.count), nil, &size, nil, 0) == 0, size > 0 else {
-			return []
+			return [:]
 		}
 
 		var entries = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride)
 
-		guard sysctl(&request, UInt32(request.count), &entries, &size, nil, 0) == 0 else { return [] }
+		guard sysctl(&request, UInt32(request.count), &entries, &size, nil, 0) == 0 else { return [:] }
 
 		let all = entries.prefix(size / MemoryLayout<kinfo_proc>.stride)
 		var children: [pid_t: [kinfo_proc]] = [:]
 		for entry in all { children[entry.kp_eproc.e_ppid, default: []].append(entry) }
 
-		var groups: Set<pid_t> = []
+		var groups: [pid_t: [ServerOwner]] = [:]
 		var pending = all.filter { $0.kp_eproc.e_pgid == group }.map(\.kp_proc.p_pid)
-
 		var seen: Set<pid_t> = Set(pending)
 
 		while let parent = pending.popLast() {
@@ -377,12 +387,18 @@ enum UnixProcess {
 
 				guard seen.insert(pid).inserted else { continue }
 
-				groups.insert(child.kp_eproc.e_pgid)
+				let started = child.kp_proc.p_un.__p_starttime
+				let owner = ServerOwner(
+					pid: pid,
+					startedAt: Int64(started.tv_sec) * 1_000_000 + Int64(started.tv_usec)
+				)
+
+				groups[child.kp_eproc.e_pgid, default: []].append(owner)
 				pending.append(pid)
 			}
 		}
 
-		groups.remove(group)
+		groups[group] = nil
 
 		return groups
 	}

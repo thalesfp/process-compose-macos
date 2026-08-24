@@ -11,7 +11,9 @@ final class GroupedProcess: @unchecked Sendable {
 	private let lock = NSLock()
 	private var reaped = false
 	private var finished = false
-	private var managed: Set<pid_t> = []
+	/// Each managed group with the identities of the members it was seen holding. A group id
+	/// is reused once its group is gone, so a member has to still be the one that was noted.
+	private var managed: [pid_t: [ServerOwner]] = [:]
 	private var notedAt: UInt64 = 0
 
 	private let isOurs: Bool
@@ -130,10 +132,9 @@ final class GroupedProcess: @unchecked Sendable {
 		}
 
 		lock.lock()
-		let known = managed
-		lock.unlock()
+		defer { lock.unlock() }
 
-		return known.contains { kill(-$0, 0) == 0 }
+		return !liveManagedGroups().isEmpty
 	}
 
 	/// Whether the child is over, without reaping it.
@@ -175,10 +176,12 @@ final class GroupedProcess: @unchecked Sendable {
 
 		guard due else { return }
 
-		let found = UnixProcess.descendantGroups(of: pid)
+		let found = UnixProcess.descendants(of: pid)
 
 		lock.lock()
-		managed.formUnion(found)
+		for (group, members) in found {
+			managed[group, default: []].append(contentsOf: members)
+		}
 		lock.unlock()
 	}
 
@@ -241,15 +244,30 @@ final class GroupedProcess: @unchecked Sendable {
 
 		guard !finished else { return }
 
+		let live = liveManagedGroups()
+
 		let ours = kill(-pid, 0) == 0
 
 		if ours { kill(-pid, number) }
 
-		for group in managed { kill(-group, number) }
+		for group in live { kill(-group, number) }
 
-		if !ours, !managed.contains(where: { kill(-$0, 0) == 0 }) {
-			finished = true
+		if !ours, live.isEmpty { finished = true }
+	}
+
+	/// The managed groups still holding a member this process saw them hold.
+	private func liveManagedGroups() -> [pid_t] {
+		var live: [pid_t] = []
+
+		for (group, members) in managed {
+			if members.contains(where: \.isRunning) {
+				live.append(group)
+			} else {
+				managed[group] = nil
+			}
 		}
+
+		return live
 	}
 }
 
