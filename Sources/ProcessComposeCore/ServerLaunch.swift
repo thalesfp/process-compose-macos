@@ -53,9 +53,10 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 	}
 
 	/// An app opened from Finder inherits `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
-	/// The app sends no API token, so a server started with one would refuse it. Read-only
-	/// would refuse to start or stop anything from the window.
-	public static let refusedVariables = ["PC_API_TOKEN_PATH", "PC_READ_ONLY"]
+	/// The app talks to the server over its HTTP API, so it does not start one that would
+	/// have no API, refuse it without a token, or refuse to act on what the window asks.
+	/// There is no flag that turns the API back on, so the variables are dropped instead.
+	public static let refusedVariables = ["PC_NO_SERVER", "PC_API_TOKEN_PATH", "PC_READ_ONLY"]
 
 	public func environment(_ base: [String: String]) -> [String: String] {
 		var environment = base

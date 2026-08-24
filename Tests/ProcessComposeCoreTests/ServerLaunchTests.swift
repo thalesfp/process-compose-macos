@@ -54,10 +54,12 @@ struct ServerLaunchTests {
 		)
 
 		let environment = plan.environment([
+			"PC_NO_SERVER": "1",
 			"PC_API_TOKEN_PATH": "/Users/dev/.pc-token",
 			"PC_READ_ONLY": "1",
 		])
 
+		#expect(environment["PC_NO_SERVER"] == nil)
 		#expect(environment["PC_API_TOKEN_PATH"] == nil)
 		#expect(environment["PC_READ_ONLY"] == nil)
 	}
