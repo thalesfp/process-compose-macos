@@ -43,6 +43,25 @@ struct ServerLaunchTests {
 		#expect(environment["PC_ADDRESS"] == "0.0.0.0")
 	}
 
+	@Test("starts no server the app could not then talk to")
+	func dropsTheVariablesThatWouldLockTheAppOut() throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				port: 28080
+			)
+		)
+
+		let environment = plan.environment([
+			"PC_API_TOKEN_PATH": "/Users/dev/.pc-token",
+			"PC_READ_ONLY": "1",
+		])
+
+		#expect(environment["PC_API_TOKEN_PATH"] == nil)
+		#expect(environment["PC_READ_ONLY"] == nil)
+	}
+
 	@Test("refuses a plan without a config file")
 	func refusesEmptyConfiguration() {
 		#expect(ServerLaunchPlan(executablePath: "/bin/pc", configurationPath: "  ", port: 28080) == nil)

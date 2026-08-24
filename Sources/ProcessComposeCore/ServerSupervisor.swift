@@ -11,9 +11,17 @@ public enum ServerLifecycle: Sendable, Equatable {
 	case failed(reason: String)
 }
 
-/// Answers whether something is already serving the API on an address.
+/// What is on an address.
+public enum ServerPresence: Sendable, Equatable {
+	case nothing
+	/// Something answers, but not as a process-compose project. Starting a server here would
+	/// only fail on a port already taken.
+	case occupied
+	case processCompose
+}
+
 public protocol ServerReachability: Sendable {
-	func isReachable(_ address: ServerAddress) async -> Bool
+	func look(at address: ServerAddress) async -> ServerPresence
 }
 
 public struct LiveServerReachability: ServerReachability {
@@ -23,21 +31,26 @@ public struct LiveServerReachability: ServerReachability {
 		self.session = session
 	}
 
-	public func isReachable(_ address: ServerAddress) async -> Bool {
+	public func look(at address: ServerAddress) async -> ServerPresence {
 		var request = URLRequest(url: address.url(path: "/project/state"))
 		request.timeoutInterval = 2
 
-		guard let (data, response) = try? await session.data(for: request) else { return false }
+		guard let (data, response) = try? await session.data(for: request) else { return .nothing }
 
-		return Self.answers(status: (response as? HTTPURLResponse)?.statusCode, body: data)
+		return Self.presence(status: (response as? HTTPURLResponse)?.statusCode, body: data)
 	}
 
-	// URLSession returns a 404 or a 500 as a success, and any service can hold the port, so
-	// the project the server reports is what separates it from something else answering.
-	static func answers(status: Int?, body: Data) -> Bool {
-		guard status == 200 else { return false }
+	// URLSession returns a 404, a 401 or a 500 as a success, and any service can hold the
+	// port, so the project the server reports is what separates process-compose from
+	// something else answering. Anything else answering still means the port is taken.
+	static func presence(status: Int?, body: Data) -> ServerPresence {
+		guard let status else { return .nothing }
 
-		return (try? JSONDecoder().decode(ProjectState.self, from: body)) != nil
+		guard status == 200, (try? JSONDecoder().decode(ProjectState.self, from: body)) != nil else {
+			return .occupied
+		}
+
+		return .processCompose
 	}
 }
 
@@ -122,13 +135,19 @@ public final class ServerSupervisor {
 			return
 		}
 
-		let reachable = await reachability.isReachable(address)
+		let presence = await reachability.look(at: address)
 
 		guard isCurrent(mine) else { return }
 
-		if reachable {
+		switch presence {
+		case .processCompose:
 			attach(on: address)
 			return
+		case .occupied:
+			state = .failed(reason: "Something that is not process-compose answers on port \(address.port)")
+			return
+		case .nothing:
+			break
 		}
 
 		guard address.isLoopback else {
@@ -161,9 +180,9 @@ public final class ServerSupervisor {
 		generation += 1
 		let mine = generation
 
-		let reachable = await reachability.isReachable(address)
+		let presence = await reachability.look(at: address)
 
-		guard isCurrent(mine), !reachable else { return }
+		guard isCurrent(mine), presence == .nothing else { return }
 
 		state = .idle
 	}
@@ -354,7 +373,7 @@ public final class ServerSupervisor {
 
 		guard isCurrent(mine) else { return }
 
-		if let address, await reachability.isReachable(address) {
+		if let address, await reachability.look(at: address) != .nothing {
 			guard isCurrent(mine) else { return }
 
 			attach(on: address, under: claim)

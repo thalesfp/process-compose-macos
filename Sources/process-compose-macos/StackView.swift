@@ -231,6 +231,7 @@ struct StackView: View {
 		switch server.state {
 		case .unconfigured: "Settings has no process-compose binary and config to start"
 		case .remote: "Settings points at \(host), so the app cannot start a server there"
+
 		case .idle: "No server started"
 		case .running(let owned): owned ? "Running the server this app started" : "Attached to a server started elsewhere"
 		case .failed(let reason): reason

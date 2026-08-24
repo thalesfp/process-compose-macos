@@ -53,8 +53,15 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 	}
 
 	/// An app opened from Finder inherits `PATH=/usr/bin:/bin:/usr/sbin:/sbin`.
+	/// The app sends no API token, so a server started with one would refuse it. Read-only
+	/// would refuse to start or stop anything from the window.
+	public static let refusedVariables = ["PC_API_TOKEN_PATH", "PC_READ_ONLY"]
+
 	public func environment(_ base: [String: String]) -> [String: String] {
 		var environment = base
+
+		for name in Self.refusedVariables { environment[name] = nil }
+
 		// process-compose expands variables in a config, and the app runs it somewhere other
 		// than where the app itself was started.
 		environment["PWD"] = workingDirectory.path

@@ -204,7 +204,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
-		reachability.isReachable = false
+		reachability.presence = .nothing
 		await supervisor.recheck()
 
 		#expect(supervisor.state == .idle)
@@ -288,9 +288,11 @@ struct ServerSupervisorTests {
 				.utf8
 		)
 
-		#expect(LiveServerReachability.answers(status: 200, body: project))
-		#expect(LiveServerReachability.answers(status: 200, body: Data(#"{"error":"not found"}"#.utf8)) == false)
-		#expect(LiveServerReachability.answers(status: 404, body: project) == false)
+		#expect(LiveServerReachability.presence(status: 200, body: project) == .processCompose)
+		#expect(LiveServerReachability.presence(status: 200, body: Data(#"{"error":"x"}"#.utf8)) == .occupied)
+		// An authenticated server refuses without a token, and the port is still taken.
+		#expect(LiveServerReachability.presence(status: 401, body: Data()) == .occupied)
+		#expect(LiveServerReachability.presence(status: nil, body: Data()) == .nothing)
 	}
 
 	@Test("keeps the running server when its request was abandoned")
@@ -566,6 +568,21 @@ struct ServerSupervisorTests {
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
 	}
 
+	@Test("starts nothing where something else is already answering")
+	func refusesAnOccupiedPort() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(.occupied),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.launched.isEmpty)
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -612,23 +629,27 @@ extension ServerLaunchPlan {
 }
 
 private final class FakeReachability: ServerReachability, @unchecked Sendable {
-	var isReachable: Bool
+	var presence: ServerPresence
 
-	init(_ isReachable: Bool) {
-		self.isReachable = isReachable
+	init(_ presence: ServerPresence) {
+		self.presence = presence
 	}
 
-	func isReachable(_ address: ServerAddress) async -> Bool { isReachable }
+	convenience init(_ isReachable: Bool) {
+		self.init(isReachable ? .processCompose : .nothing)
+	}
+
+	func look(at address: ServerAddress) async -> ServerPresence { presence }
 }
 
 /// Stands in for a probe still waiting on the network when its inputs change.
 private final class SlowReachability: ServerReachability, @unchecked Sendable {
 	private(set) var didStart = false
 
-	func isReachable(_ address: ServerAddress) async -> Bool {
+	func look(at address: ServerAddress) async -> ServerPresence {
 		didStart = true
 		try? await Task.sleep(for: .seconds(30))
-		return false
+		return .nothing
 	}
 }
 

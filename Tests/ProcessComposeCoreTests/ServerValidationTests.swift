@@ -414,7 +414,7 @@ private func plan(in directory: URL) throws -> ServerLaunchPlan {
 }
 
 private struct NeverReachable: ServerReachability {
-	func isReachable(_ address: ServerAddress) async -> Bool { false }
+	func look(at address: ServerAddress) async -> ServerPresence { .nothing }
 }
 
 @MainActor
