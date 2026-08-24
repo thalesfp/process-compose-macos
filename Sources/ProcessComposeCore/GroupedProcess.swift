@@ -81,8 +81,8 @@ final class GroupedProcess: @unchecked Sendable {
 
 		// Closed on exec, or a later spawn would inherit this pipe and hold it open, and the
 		// reader of an exited server would wait for an end of file that never came.
-		fcntl(reading, F_SETFD, FD_CLOEXEC)
-		fcntl(writing, F_SETFD, FD_CLOEXEC)
+		_ = fcntl(reading, F_SETFD, FD_CLOEXEC)
+		_ = fcntl(writing, F_SETFD, FD_CLOEXEC)
 
 		var actions: posix_spawn_file_actions_t?
 		posix_spawn_file_actions_init(&actions)
