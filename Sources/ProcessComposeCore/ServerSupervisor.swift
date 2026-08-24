@@ -265,15 +265,14 @@ public final class ServerSupervisor {
 	/// `held` is the claim the caller already has. Taking a second one for the same file
 	/// would wait on a lock this process is holding, which is a wait that never ends.
 	private func takeOver(port: Int, under held: ServerLaunchClaim?) -> Bool {
-		let claim = held ?? records.claimLaunch()
+		let claim = held ?? records.claimLaunch(port: port)
 
 		guard claim != nil else { return false }
 
 		defer { _ = claim }
 
 		guard
-			let recorded = records.load(),
-			recorded.port == port,
+			let recorded = records.load(port: port),
 			// A record whose app is still running belongs to that copy, and stopping its
 			// server would take the stack out from under it.
 			recorded.owner == owner || !runner.isRunning(recorded.owner),
@@ -320,9 +319,9 @@ public final class ServerSupervisor {
 
 	/// The claim never waits, so a copy of the app that is a moment ahead is given time
 	/// rather than reported as a conflict at once.
-	private func claimLaunch() async -> ServerLaunchClaim? {
+	private func claimLaunch(port: Int) async -> ServerLaunchClaim? {
 		for attempt in 0 ..< 10 {
-			if let claim = records.claimLaunch() { return claim }
+			if let claim = records.claimLaunch(port: port) { return claim }
 
 			guard attempt < 9 else { break }
 
@@ -347,7 +346,7 @@ public final class ServerSupervisor {
 		// claim is held from that last look until the record is written.
 		// Without the claim there is no exclusion between copies of the app, and without the
 		// record a crash leaves the stack unrecoverable. Neither is worth starting without.
-		guard let claim = await claimLaunch() else {
+		guard let claim = await claimLaunch(port: plan.port) else {
 			state = .failed(reason: "Could not claim the right to start a server")
 			return
 		}
@@ -365,7 +364,7 @@ public final class ServerSupervisor {
 
 		// A server that is up but not answering yet still owns the port, and starting a
 		// second one would only replace the record that makes the first recoverable.
-		if let recorded = records.load(), recorded.port == plan.port {
+		if let recorded = records.load(port: plan.port) {
 			if recorded.owner != owner, runner.isRunning(recorded.owner) {
 				state = .running(owned: false)
 				return

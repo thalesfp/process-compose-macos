@@ -142,6 +142,20 @@ struct ServerLaunchTests {
 		#expect(try #require(ServerAddress(host: "build-box.local", port: 28080)).isLoopback == false)
 	}
 
+	@Test("runs the config with PWD where process-compose runs")
+	func namesTheWorkingDirectoryInTheEnvironment() throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/repos/stack/process-compose.yaml",
+				workingDirectoryPath: "/Users/dev/repos",
+				port: 28080
+			)
+		)
+
+		#expect(plan.environment(["PWD": "/Applications"])["PWD"] == "/Users/dev/repos")
+	}
+
 	@Test("finds the first install prefix that holds the binary")
 	func discoversBinary() {
 		let found = ServerBinary.discover { $0 == "/usr/local/bin/process-compose" }

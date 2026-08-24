@@ -742,7 +742,9 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 		self.record = record
 	}
 
-	func load() -> ServerRecord? { record }
+	func load(port: Int) -> ServerRecord? {
+		record?.port == port ? record : nil
+	}
 
 	func save(_ record: ServerRecord) throws {
 		if savingFails { throw StoreFailure.full }
@@ -753,7 +755,7 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 	nonisolated(unsafe) var refusesClaim = false
 	nonisolated(unsafe) var savingFails = false
 
-	func claimLaunch() -> ServerLaunchClaim? {
+	func claimLaunch(port: Int) -> ServerLaunchClaim? {
 		guard !refusesClaim else { return nil }
 
 		return ServerLaunchClaim(

@@ -43,12 +43,14 @@ public struct ServerRecord: Codable, Sendable, Hashable {
 }
 
 public protocol ServerRecordStore: Sendable {
-	func load() -> ServerRecord?
+	/// Records are kept per port: a copy of the app running a stack on one port must not
+	/// lose its record because another copy started one on a different port.
+	func load(port: Int) -> ServerRecord?
 	func save(_ record: ServerRecord) throws
 	func clear(_ record: ServerRecord) throws
 	/// Held from the last look at the port until the record is written, so two copies of the
 	/// app cannot both find the port free and both start a server on it.
-	func claimLaunch() -> ServerLaunchClaim?
+	func claimLaunch(port: Int) -> ServerLaunchClaim?
 }
 
 /// A claim on starting a server, released when it is let go of.
@@ -91,10 +93,14 @@ public struct FileServerRecordStore: ServerRecordStore {
 			.appendingPathComponent("server.json")
 	}
 
-	public func load() -> ServerRecord? {
-		guard let data = try? Data(contentsOf: url) else { return nil }
+	public func load(port: Int) -> ServerRecord? {
+		all()[String(port)]
+	}
 
-		return try? JSONDecoder().decode(ServerRecord.self, from: data)
+	private func all() -> [String: ServerRecord] {
+		guard let data = try? Data(contentsOf: url) else { return [:] }
+
+		return (try? JSONDecoder().decode([String: ServerRecord].self, from: data)) ?? [:]
 	}
 
 	public func save(_ record: ServerRecord) throws {
@@ -104,7 +110,10 @@ public struct FileServerRecordStore: ServerRecordStore {
 		)
 
 		try holdingTheLock {
-			try JSONEncoder().encode(record).write(to: url, options: .atomic)
+			var records = all()
+			records[String(record.port)] = record
+
+			try JSONEncoder().encode(records).write(to: url, options: .atomic)
 		}
 	}
 
@@ -113,19 +122,27 @@ public struct FileServerRecordStore: ServerRecordStore {
 	/// removing happen under one lock, or another copy could save between them.
 	public func clear(_ record: ServerRecord) throws {
 		try holdingTheLock {
-			guard load() == record else { return }
+			var records = all()
 
-			try FileManager.default.removeItem(at: url)
+			guard records[String(record.port)] == record else { return }
+
+			records[String(record.port)] = nil
+
+			if records.isEmpty {
+				try FileManager.default.removeItem(at: url)
+			} else {
+				try JSONEncoder().encode(records).write(to: url, options: .atomic)
+			}
 		}
 	}
 
-	public func claimLaunch() -> ServerLaunchClaim? {
+	public func claimLaunch(port: Int) -> ServerLaunchClaim? {
 		try? FileManager.default.createDirectory(
 			at: url.deletingLastPathComponent(),
 			withIntermediateDirectories: true
 		)
 
-		return ServerLaunchClaim(path: url.appendingPathExtension("launch").path)
+		return ServerLaunchClaim(path: url.appendingPathExtension("launch-\(port)").path)
 	}
 
 	// Copies of the app are separate processes, so the exclusion has to be one the system

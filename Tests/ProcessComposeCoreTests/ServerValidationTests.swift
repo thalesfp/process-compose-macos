@@ -271,10 +271,12 @@ struct ServerRecordStoreTests {
 		defer { try? FileManager.default.removeItem(at: directory) }
 
 		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
-		let held = try #require(store.claimLaunch())
+		let held = try #require(store.claimLaunch(port: 28080))
 
 		// A wait here would be a wait on this same process, which nothing could end.
-		#expect(store.claimLaunch() == nil)
+		#expect(store.claimLaunch(port: 28080) == nil)
+		// A different port is a different stack, and is not made to wait for this one.
+		#expect(store.claimLaunch(port: 28099) != nil)
 
 		_ = held
 	}
@@ -292,11 +294,32 @@ struct ServerRecordStoreTests {
 		try store.save(theirs)
 		try store.clear(mine)
 
-		#expect(store.load() == theirs)
+		#expect(store.load(port: 28080) == theirs)
 
 		try store.clear(theirs)
 
-		#expect(store.load() == nil)
+		#expect(store.load(port: 28080) == nil)
+	}
+
+	@Test("keeps the record of a stack on another port")
+	func keepsRecordsOfOtherPorts() throws {
+		let directory = try scratchDirectory("ports")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
+		let here = ServerRecord(group: 100, port: 28080, owner: ServerOwner(pid: 900, startedAt: 1))
+		let there = ServerRecord(group: 200, port: 28099, owner: ServerOwner(pid: 901, startedAt: 2))
+
+		try store.save(here)
+		try store.save(there)
+
+		#expect(store.load(port: 28080) == here)
+		#expect(store.load(port: 28099) == there)
+
+		try store.clear(here)
+
+		#expect(store.load(port: 28080) == nil)
+		#expect(store.load(port: 28099) == there)
 	}
 }
 
@@ -361,7 +384,7 @@ struct ServerRecoveryTests {
 		defer { try? FileManager.default.removeItem(at: directory) }
 
 		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
-		try store.save(ServerRecord(group: 4242, port: 28080, owner: ServerOwner(pid: 900, startedAt: 111)))
+		try store.save(ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: ServerOwner(pid: 900, startedAt: 111)))
 
 		let supervisor = ServerSupervisor(
 			runner: RecordedRunner(),
@@ -382,7 +405,7 @@ struct ServerRecoveryTests {
 		_ = try? await recovering.value
 
 		#expect(supervisor.state == .running(owned: true))
-		#expect(store.load()?.owner.pid == 901)
+		#expect(store.load(port: ServerAddress.defaultPort)?.owner.pid == 901)
 	}
 }
 
