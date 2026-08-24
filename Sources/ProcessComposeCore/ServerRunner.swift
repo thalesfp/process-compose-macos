@@ -7,6 +7,8 @@ import Foundation
 public protocol ServerProcess: AnyObject {
 	var pid: Int32 { get }
 	var isRunning: Bool { get }
+	/// The processes it is holding, so they can be recorded and recognised again later.
+	var members: Set<ServerOwner> { get }
 	/// The server's own output, one line per element, finished when the server exits.
 	var output: AsyncStream<String> { get }
 	func exitCode() async -> Int32
@@ -24,9 +26,9 @@ public protocol ServerRunner {
 	func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess
 	/// Loads the config without running it, so a stack that cannot start says why first.
 	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation
-	/// Takes back a server recorded by an earlier run, or nil when its group is gone or now
-	/// holds processes none of `names` describes.
-	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)?
+	/// Takes back a server recorded by an earlier run, or nil when nothing it was recorded as
+	/// holding is still there.
+	func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)?
 	func isRunning(_ owner: ServerOwner) -> Bool
 	/// Whether anything of a recorded group is left, without taking it over.
 	func isGroupRunning(_ group: Int32) -> Bool
@@ -142,8 +144,8 @@ public struct LiveServerRunner: ServerRunner {
 		group > 0 && Darwin.kill(-group, 0) == 0
 	}
 
-	public func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
-		guard let existing = GroupedProcess.adopt(group: group, names: names) else { return nil }
+	public func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)? {
+		guard let existing = GroupedProcess.adopt(group: group, members: members) else { return nil }
 
 		return AdoptedServerProcess(existing)
 	}
@@ -158,6 +160,7 @@ final class SpawnedServerProcess: ServerProcess {
 
 	var pid: Int32 { check.pid }
 	var isRunning: Bool { check.hasMembers }
+	var members: Set<ServerOwner> { check.members }
 
 	init(_ plan: ServerLaunchPlan) throws {
 		// The binary can be a script that starts process-compose without replacing itself,
@@ -250,6 +253,7 @@ final class AdoptedServerProcess: ServerProcess {
 
 	var pid: Int32 { group.pid }
 	var isRunning: Bool { group.hasMembers }
+	var members: Set<ServerOwner> { group.members }
 
 	init(_ group: GroupedProcess, pollInterval: Duration = .seconds(1)) {
 		self.group = group

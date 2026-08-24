@@ -248,11 +248,24 @@ extension ServerProcessTests {
 			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
 		)
 
+		// What the record would hold: what the stack was seen holding while it was starting.
+		var recorded = started.members
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while recorded.isEmpty, ContinuousClock.now < deadline {
+			try await Task.sleep(for: .milliseconds(20))
+			recorded = started.members
+		}
+
 		await until { !UnixProcess.isAlive(group) }
 
-		#expect(runner.adopt(group: group, names: ["process-compose"]) == nil)
+		// A group number alone proves nothing: the same number with processes this stack was
+		// never recorded as holding is somebody else's group.
+		let stranger = ServerOwner(pid: 999_999, startedAt: 1)
 
-		let adopted = try #require(runner.adopt(group: group, names: ["sleep"]))
+		#expect(runner.adopt(group: group, members: [stranger]) == nil)
+
+		let adopted = try #require(runner.adopt(group: group, members: recorded))
 
 		#expect(adopted.isRunning)
 
@@ -431,7 +444,7 @@ private struct RecordedRunner: ServerRunner {
 
 	func isGroupRunning(_ group: Int32) -> Bool { true }
 
-	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
+	func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)? {
 		RecoveredServer(pid: group)
 	}
 }
@@ -441,6 +454,7 @@ private final class RecoveredServer: ServerProcess {
 	let pid: Int32
 	let output = AsyncStream<String> { $0.finish() }
 
+	var members: Set<ServerOwner> { [ServerOwner(pid: pid, startedAt: Int64(pid))] }
 	var isRunning = true
 
 	init(pid: Int32) {

@@ -34,11 +34,15 @@ public struct ServerRecord: Codable, Sendable, Hashable {
 	public let group: Int32
 	public let port: Int
 	public let owner: ServerOwner
+	/// The processes the group was seen holding. A group number is handed out again once its
+	/// group is gone, so the number alone is no proof this is the same stack.
+	public let members: Set<ServerOwner>
 
-	public init(group: Int32, port: Int, owner: ServerOwner) {
+	public init(group: Int32, port: Int, owner: ServerOwner, members: Set<ServerOwner> = []) {
 		self.group = group
 		self.port = port
 		self.owner = owner
+		self.members = members
 	}
 }
 

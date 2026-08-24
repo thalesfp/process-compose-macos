@@ -26,7 +26,7 @@ struct ServerSupervisorTests {
 		let orphan = FakeServerProcess(pid: 4242)
 		runner.adoptable[4242] = orphan
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900))
+			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900), members: [.test(4242)])
 		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -38,7 +38,6 @@ struct ServerSupervisorTests {
 		await supervisor.use(address: .standard, plan: .test)
 
 		#expect(supervisor.state == .running(owned: true))
-		#expect(runner.adoptedWith.contains("process-compose"))
 
 		await supervisor.stop()
 
@@ -53,7 +52,7 @@ struct ServerSupervisorTests {
 		runner.adoptable[4242] = orphan
 		runner.liveOwners = [.test(900)]
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900))
+			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900), members: [.test(4242)])
 		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -87,7 +86,8 @@ struct ServerSupervisorTests {
 
 		#expect(supervisor.state == .running(owned: true))
 		#expect(runner.launched == [.test])
-		#expect(records.record == ServerRecord(group: 4242, port: 28080, owner: .test(901)))
+		#expect(records.record?.group == 4242)
+		#expect(records.record?.owner == .test(901))
 	}
 
 	@Test("stays put when no launch is configured")
@@ -231,7 +231,7 @@ struct ServerSupervisorTests {
 	func quitKeepsAnotherCopysRecord() async {
 		let runner = FakeRunner()
 		runner.liveOwners = [.test(900)]
-		let record = ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900))
+		let record = ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900), members: [.test(4242)])
 		let records = MemoryRecordStore(record: record)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -362,7 +362,9 @@ struct ServerSupervisorTests {
 		let runner = FakeRunner()
 		let recovered = FakeServerProcess(pid: 4242)
 		runner.adoptable[4242] = recovered
-		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: .test(901)))
+		let records = MemoryRecordStore(
+			record: ServerRecord(group: 4242, port: 28080, owner: .test(901), members: [.test(4242)])
+		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(false),
@@ -380,7 +382,7 @@ struct ServerSupervisorTests {
 	func leavesAnUnreachableServerOfAnotherCopyAlone() async {
 		let runner = FakeRunner()
 		runner.liveOwners = [.test(900)]
-		let record = ServerRecord(group: 4242, port: 28080, owner: .test(900))
+		let record = ServerRecord(group: 4242, port: 28080, owner: .test(900), members: [.test(4242)])
 		let records = MemoryRecordStore(record: record)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -423,7 +425,7 @@ struct ServerSupervisorTests {
 		// The pid is in use, but by something that is not the app that wrote the record.
 		runner.liveOwners = [.test(900)]
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: 28080, owner: ServerOwner(pid: 900, startedAt: 111))
+			record: ServerRecord(group: 4242, port: 28080, owner: ServerOwner(pid: 900, startedAt: 111), members: [.test(4242)])
 		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -477,7 +479,7 @@ struct ServerSupervisorTests {
 		let runner = FakeRunner()
 		runner.adoptable[4242] = FakeServerProcess(pid: 4242)
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: 28080, owner: .test(900))
+			record: ServerRecord(group: 4242, port: 28080, owner: .test(900), members: [.test(4242)])
 		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -496,7 +498,7 @@ struct ServerSupervisorTests {
 	@Test("leaves a stack alone once another copy has taken it over")
 	func doesNotTakeOverTwice() async {
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: 28080, owner: .test(900))
+			record: ServerRecord(group: 4242, port: 28080, owner: .test(900), members: [.test(4242)])
 		)
 
 		let first = FakeRunner()
@@ -552,7 +554,7 @@ struct ServerSupervisorTests {
 		let runner = FakeRunner()
 		// The group is alive, but nothing in it is recognised, so it cannot be adopted.
 		runner.liveGroups = [4242]
-		let record = ServerRecord(group: 4242, port: 28080, owner: .test(900))
+		let record = ServerRecord(group: 4242, port: 28080, owner: .test(900), members: [.test(4242)])
 		let records = MemoryRecordStore(record: record)
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -601,6 +603,31 @@ struct ServerSupervisorTests {
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
 	}
 
+	@Test("does not take over a group whose number has been handed to someone else")
+	func refusesAGroupThatIsNoLongerTheRecordedOne() async {
+		let runner = FakeRunner()
+		// The group number is in use, but by processes this stack was never recorded holding.
+		runner.adoptable[4242] = FakeServerProcess(pid: 4242)
+		let record = ServerRecord(
+			group: 4242,
+			port: 28080,
+			owner: .test(900),
+			members: [ServerOwner(pid: 4242, startedAt: 11)]
+		)
+		let records = MemoryRecordStore(record: record)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: .test(901)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: false))
+		#expect(records.record == record)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -634,7 +661,7 @@ private enum TestError: LocalizedError {
 
 extension ServerOwner {
 	fileprivate static func test(_ pid: Int32) -> ServerOwner {
-		ServerOwner(pid: pid, startedAt: Int64(pid) * 1000)
+		ServerOwner(pid: pid, startedAt: Int64(pid))
 	}
 }
 
@@ -679,7 +706,7 @@ private final class FakeRunner: ServerRunner {
 	var validation: ServerValidation = .valid
 	var liveOwners: Set<ServerOwner> = []
 	var liveGroups: Set<Int32> = []
-	private(set) var adoptedWith: Set<String> = []
+	private(set) var adoptedWith: Set<ServerOwner> = []
 	var ignoresTerminate = false
 	var ignoresKill = false
 	private(set) var started: FakeServerProcess?
@@ -707,10 +734,13 @@ private final class FakeRunner: ServerRunner {
 		return validation
 	}
 
-	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
-		adoptedWith = names
+	func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)? {
+		adoptedWith = members
 
-		return adoptable[group]
+		// The real runner takes a group back only when one recorded member is still there.
+		return members.contains(where: { adoptable[group]?.members.contains($0) ?? false })
+			? adoptable[group]
+			: nil
 	}
 
 	func isRunning(_ owner: ServerOwner) -> Bool {
@@ -726,6 +756,8 @@ private final class FakeRunner: ServerRunner {
 private final class FakeServerProcess: ServerProcess {
 	let pid: Int32
 	let output: AsyncStream<String>
+
+	var members: Set<ServerOwner> { [ServerOwner(pid: pid, startedAt: Int64(pid))] }
 
 	private(set) var isRunning = true
 	private(set) var didTerminate = false

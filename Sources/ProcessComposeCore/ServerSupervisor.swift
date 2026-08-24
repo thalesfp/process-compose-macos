@@ -296,10 +296,15 @@ public final class ServerSupervisor {
 			// A record whose app is still running belongs to that copy, and stopping its
 			// server would take the stack out from under it.
 			recorded.owner == owner || !runner.isRunning(recorded.owner),
-			let existing = runner.adopt(group: recorded.group, names: launchNames)
+			let existing = runner.adopt(group: recorded.group, members: recorded.members)
 		else { return false }
 
-		let mine = ServerRecord(group: recorded.group, port: recorded.port, owner: owner)
+		let mine = ServerRecord(
+			group: recorded.group,
+			port: recorded.port,
+			owner: owner,
+			members: existing.members.union(recorded.members.filter(\.isRunning))
+		)
 
 		do {
 			try records.save(mine)
@@ -314,14 +319,6 @@ public final class ServerSupervisor {
 		watch(existing)
 
 		return true
-	}
-
-	/// What the app would have spawned: process-compose itself, or the script configured to
-	/// run it.
-	private var launchNames: Set<String> {
-		["process-compose", plan?.executable.lastPathComponent].compactMap { $0 }.reduce(into: Set()) {
-			$0.insert($1)
-		}
 	}
 
 	/// One launch at a time. A second attempt while the first is still deciding would race it
@@ -416,7 +413,14 @@ public final class ServerSupervisor {
 			let started = try runner.run(plan)
 
 			do {
-				try records.save(ServerRecord(group: started.pid, port: plan.port, owner: owner))
+				try records.save(
+					ServerRecord(
+						group: started.pid,
+						port: plan.port,
+						owner: owner,
+						members: started.members
+					)
+				)
 			} catch {
 				started.terminate()
 				await waitForExit(of: started)
@@ -426,7 +430,12 @@ public final class ServerSupervisor {
 				return
 			}
 
-			record = ServerRecord(group: started.pid, port: plan.port, owner: owner)
+			record = ServerRecord(
+				group: started.pid,
+				port: plan.port,
+				owner: owner,
+				members: started.members
+			)
 			server = started
 			state = .running(owned: true)
 			watch(started)
@@ -436,9 +445,42 @@ public final class ServerSupervisor {
 		}
 	}
 
+	/// The stack changes shape as it runs: a wrapper hands over to process-compose, which
+	/// starts and restarts services. The record follows it, or a later run would look for
+	/// processes that have since been replaced.
+	private func rememberMembers(of started: any ServerProcess) {
+		guard let current = record, server === started else { return }
+
+		let members = started.members
+
+		guard !members.isEmpty, members != current.members else { return }
+
+		let updated = ServerRecord(
+			group: current.group,
+			port: current.port,
+			owner: current.owner,
+			members: members
+		)
+
+		do {
+			try records.save(updated)
+			record = updated
+		} catch {
+			log.append("Could not record what the server is running: \(error.localizedDescription)")
+		}
+	}
+
 	private func watch(_ started: any ServerProcess) {
 		watchTask?.cancel()
 		watchTask = Task { [weak self] in
+			let following = Task { [weak self] in
+				while !Task.isCancelled {
+					try? await Task.sleep(for: .seconds(3))
+					self?.rememberMembers(of: started)
+				}
+			}
+			defer { following.cancel() }
+
 			let exit = Task { await started.exitCode() }
 
 			for await line in started.output {

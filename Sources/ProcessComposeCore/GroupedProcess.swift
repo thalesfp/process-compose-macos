@@ -44,16 +44,17 @@ final class GroupedProcess: @unchecked Sendable {
 	/// while the group lives, so a record that outlived its group can name an unrelated one:
 	/// a member has to be recognised before anything is signalled. Nothing is reaped here,
 	/// since this process never forked it.
-	static func adopt(group: pid_t, names: Set<String>) -> GroupedProcess? {
+	static func adopt(group: pid_t, members: Set<ServerOwner>) -> GroupedProcess? {
 		guard group > 0, kill(-group, 0) == 0 else { return nil }
 
-		let members = UnixProcess.members(of: group)
+		// One of the processes this stack was recorded as holding has to still be there, and
+		// be the same process it was. A matching name in a matching group number is not that.
+		guard members.contains(where: \.isRunning) else { return nil }
 
-		guard members.contains(where: { names.contains(UnixProcess.name(of: $0) ?? "") }) else {
-			return nil
-		}
+		let taken = GroupedProcess(pid: group, output: -1, isOurs: false)
+		taken.known[group] = members.filter(\.isRunning)
 
-		return GroupedProcess(pid: group, output: -1, isOurs: false)
+		return taken
 	}
 
 	static func run(
@@ -281,6 +282,15 @@ final class GroupedProcess: @unchecked Sendable {
 		}
 
 		if live.isEmpty { finished = true }
+	}
+
+	/// Everything this group is holding now, as identities that can be recorded and checked
+	/// again later.
+	var members: Set<ServerOwner> {
+		lock.lock()
+		defer { lock.unlock() }
+
+		return liveMembers()
 	}
 
 	/// Everything seen under the launch group that is still the process it was. The kernel
