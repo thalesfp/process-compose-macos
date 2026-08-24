@@ -64,6 +64,33 @@ struct ServerLaunchTests {
 		#expect(environment["PC_READ_ONLY"] == nil)
 	}
 
+	@Test("refuses a host the app could not then find the server on")
+	func refusesAnUnusableHost() {
+		#expect(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				host: " local host ",
+				port: 28080
+			) == nil
+		)
+	}
+
+	@Test("takes the host the app looks for the server on")
+	func takesTheCheckedHost() throws {
+		let address = try #require(ServerAddress(host: " localhost ", port: 28080))
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				address: address
+			)
+		)
+
+		#expect(plan.host == "localhost")
+		#expect(plan.arguments.firstIndex(of: "--address").map { plan.arguments[$0 + 1] } == "localhost")
+	}
+
 	@Test("refuses a plan without a config file")
 	func refusesEmptyConfiguration() {
 		#expect(ServerLaunchPlan(executablePath: "/bin/pc", configurationPath: "  ", port: 28080) == nil)

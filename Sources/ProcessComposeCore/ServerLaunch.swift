@@ -5,8 +5,12 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 	public let executable: URL
 	public let configuration: URL
 	public let workingDirectory: URL
-	public let host: String
-	public let port: Int
+	/// The address the server is to answer on, already checked: the plan and the probe that
+	/// looks for the server must not disagree about what the host is.
+	public let address: ServerAddress
+
+	public var host: String { address.host }
+	public var port: Int { address.port }
 
 	/// A config's `working_dir` and `watch` paths resolve against the directory
 	/// process-compose runs in, which is not always the one holding the config.
@@ -17,19 +21,34 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 		host: String = ServerAddress.defaultHost,
 		port: Int
 	) {
+		guard let address = ServerAddress(host: host, port: port) else { return nil }
+
+		self.init(
+			executablePath: executablePath,
+			configurationPath: configurationPath,
+			workingDirectoryPath: workingDirectoryPath,
+			address: address
+		)
+	}
+
+	public init?(
+		executablePath: String,
+		configurationPath: String,
+		workingDirectoryPath: String = "",
+		address: ServerAddress
+	) {
 		let executable = executablePath.trimmingCharacters(in: .whitespacesAndNewlines)
 		let configuration = configurationPath.trimmingCharacters(in: .whitespacesAndNewlines)
 		let workingDirectory = workingDirectoryPath.trimmingCharacters(in: .whitespacesAndNewlines)
 
-		guard !executable.isEmpty, !configuration.isEmpty, (1 ... 65535).contains(port) else { return nil }
+		guard !executable.isEmpty, !configuration.isEmpty else { return nil }
 
 		self.executable = Self.url(executable)
 		self.configuration = Self.url(configuration)
 		self.workingDirectory = workingDirectory.isEmpty
 			? Self.url(configuration).deletingLastPathComponent()
 			: URL(fileURLWithPath: (workingDirectory as NSString).expandingTildeInPath, isDirectory: true)
-		self.host = host
-		self.port = port
+		self.address = address
 	}
 
 	private static func url(_ path: String) -> URL {

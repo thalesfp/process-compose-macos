@@ -242,13 +242,14 @@ struct StackView: View {
 	}
 
 	private var launchPlan: ServerLaunchPlan? {
-		ServerLaunchPlan(
-			executablePath: binaryPath,
-			configurationPath: configPath,
-			workingDirectoryPath: workingDirectory,
-			host: host,
-			port: port
-		)
+		address.flatMap {
+			ServerLaunchPlan(
+				executablePath: binaryPath,
+				configurationPath: configPath,
+				workingDirectoryPath: workingDirectory,
+				address: $0
+			)
+		}
 	}
 
 	private var configURLs: [URL] {
