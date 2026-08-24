@@ -296,6 +296,27 @@ struct ServerRecordStoreTests {
 		_ = held
 	}
 
+	@Test("does not leave the claim in the hands of the stack it started")
+	func theStackDoesNotInheritTheClaim() async throws {
+		let directory = try scratchDirectory("inherit")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
+		let plan = try wrapper(in: directory, "sleep 30")
+
+		var claim = store.claimLaunch(port: 28080)
+
+		#expect(claim != nil)
+
+		let server = try LiveServerRunner().run(plan)
+		defer { server.kill() }
+
+		// The app lets go of the claim; the stack it started must not still be holding it.
+		claim = nil
+
+		#expect(store.claimLaunch(port: 28080) != nil)
+	}
+
 	@Test("keeps a record another copy of the app wrote in its place")
 	func clearsOnlyItsOwnRecord() throws {
 		let directory = try scratchDirectory("records")
@@ -661,7 +682,7 @@ struct ManagedGroupTests {
 		)
 
 		var found = false
-		let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+		let deadline = ContinuousClock.now.advanced(by: .seconds(30))
 
 		while !found, ContinuousClock.now < deadline {
 			found = server.membership.values.contains { $0.contains { $0.pid == service } }

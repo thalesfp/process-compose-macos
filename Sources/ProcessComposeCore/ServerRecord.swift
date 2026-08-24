@@ -73,7 +73,9 @@ public final class ServerLaunchClaim: Sendable {
 	private let gate: Int32
 
 	init?(path: String) {
-		let gate = open(path, O_CREAT | O_RDWR, 0o644)
+		// Closed on exec, or the stack this claim is taken to start would inherit it and go
+		// on holding the lock after the app that took it has gone.
+		let gate = open(path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
 
 		guard gate >= 0 else { return nil }
 
@@ -163,7 +165,7 @@ public struct FileServerRecordStore: ServerRecordStore {
 	// Copies of the app are separate processes, so the exclusion has to be one the system
 	// holds: flock on a file beside the record.
 	private func holdingTheLock(_ body: () throws -> Void) throws {
-		let gate = open(url.appendingPathExtension("lock").path, O_CREAT | O_RDWR, 0o644)
+		let gate = open(url.appendingPathExtension("lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
 
 		guard gate >= 0 else { return try body() }
 
