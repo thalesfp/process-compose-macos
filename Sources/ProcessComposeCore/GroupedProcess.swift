@@ -59,19 +59,7 @@ final class GroupedProcess: @unchecked Sendable {
 
 		guard !confirmed.isEmpty else { return nil }
 
-		// The stack can have moved out of the group it was launched in, and then the group to
-		// ask to stop is the one holding what has been there longest: a server outlives the
-		// services it starts.
-		let leader =
-			confirmed[group] != nil
-			? group
-			: confirmed.min { left, right in
-				(left.value.map(\.startedAt).min() ?? 0) < (right.value.map(\.startedAt).min() ?? 0)
-			}?.key
-
-		guard let leader else { return nil }
-
-		let taken = GroupedProcess(pid: leader, output: -1, isOurs: false)
+		let taken = GroupedProcess(pid: group, output: -1, isOurs: false)
 		taken.known = confirmed
 
 		return taken
@@ -300,10 +288,8 @@ final class GroupedProcess: @unchecked Sendable {
 			for member in live { kill(member.pid, number) }
 
 			for group in liveGroups() { kill(-group, number) }
-		} else if liveGroups().contains(pid) {
-			// Only while the launch group still holds a process this one saw it hold: its
-			// number is handed out again once it is empty.
-			kill(-pid, number)
+		} else if let control = controlGroup() {
+			kill(-control, number)
 		}
 
 		if live.isEmpty { finished = true }
@@ -339,6 +325,19 @@ final class GroupedProcess: @unchecked Sendable {
 		}
 
 		return live
+	}
+
+	/// The group to ask to stop: the one the stack was launched in while it still holds
+	/// something, and otherwise the one holding what has been there longest, since a server
+	/// outlives the services it starts. A group whose number has been handed on is never it.
+	private func controlGroup() -> pid_t? {
+		let live = liveGroups()
+
+		if live.contains(pid) { return pid }
+
+		return live.min { left, right in
+			(known[left]?.map(\.startedAt).min() ?? 0) < (known[right]?.map(\.startedAt).min() ?? 0)
+		}
 	}
 
 	/// The groups still holding a member this process saw them hold, the launch group

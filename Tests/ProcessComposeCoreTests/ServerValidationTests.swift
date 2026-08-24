@@ -487,7 +487,7 @@ struct ManagedGroupTests {
 			"""
 			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 0.5
+			sleep 2
 			"""
 		)
 
@@ -568,7 +568,7 @@ struct ManagedGroupTests {
 			"""
 			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 0.5
+			sleep 2
 			"""
 		)
 
@@ -649,7 +649,7 @@ struct ManagedGroupTests {
 				sleep 30;
 			' "$(dirname "$0")" >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 0.5
+			sleep 2
 			"""
 		)
 
@@ -689,7 +689,7 @@ struct ManagedGroupTests {
 			"""
 			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 0.5
+			sleep 2
 			"""
 		)
 
@@ -718,6 +718,46 @@ struct ManagedGroupTests {
 		await until { kill(server, 0) != 0 }
 
 		#expect(kill(server, 0) != 0)
+	}
+
+	@Test("asks the server to stop even after it moved out of its launch group")
+	func asksTheMovedServerToStop() async throws {
+		let directory = try scratchDirectory("moved-stop")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 2
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let moved = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+		let launchGroup = server.pid
+
+		var tracked = false
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while !tracked, ContinuousClock.now < deadline {
+			tracked = server.membership[moved] != nil
+
+			if !tracked { try await Task.sleep(for: .milliseconds(20)) }
+		}
+
+		#expect(tracked)
+		await until { !UnixProcess.isAlive(launchGroup) }
+
+		// Asked, not forced: the launch group is empty, so the request has to reach the group
+		// the server moved into.
+		server.terminate()
+		await until { kill(moved, 0) != 0 }
+
+		#expect(kill(moved, 0) != 0)
 	}
 
 	@Test("stops a service the server put in a group of its own")
