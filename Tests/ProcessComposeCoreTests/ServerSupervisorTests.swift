@@ -470,6 +470,61 @@ struct ServerSupervisorTests {
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
 	}
 
+	@Test("writes itself into the record of a server it takes over")
+	func writesItselfIntoAnAdoptedRecord() async {
+		let runner = FakeRunner()
+		runner.adoptable[4242] = FakeServerProcess(pid: 4242)
+		let records = MemoryRecordStore(
+			record: ServerRecord(group: 4242, port: 28080, owner: .test(900))
+		)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: .test(901)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(records.record?.owner == .test(901))
+		#expect(records.record?.group == 4242)
+	}
+
+	@Test("leaves a stack alone once another copy has taken it over")
+	func doesNotTakeOverTwice() async {
+		let records = MemoryRecordStore(
+			record: ServerRecord(group: 4242, port: 28080, owner: .test(900))
+		)
+
+		let first = FakeRunner()
+		first.adoptable[4242] = FakeServerProcess(pid: 4242)
+		let firstCopy = ServerSupervisor(
+			runner: first,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: .test(901)
+		)
+
+		await firstCopy.use(address: .standard, plan: .test)
+
+		let second = FakeRunner()
+		second.adoptable[4242] = FakeServerProcess(pid: 4242)
+		second.liveOwners = [.test(901)]
+		let secondCopy = ServerSupervisor(
+			runner: second,
+			reachability: FakeReachability(true),
+			records: records,
+			owner: .test(902)
+		)
+
+		await secondCopy.use(address: .standard, plan: .test)
+
+		#expect(firstCopy.state == .running(owned: true))
+		#expect(secondCopy.state == .running(owned: false))
+		#expect(records.record?.owner == .test(901))
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

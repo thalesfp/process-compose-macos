@@ -232,23 +232,44 @@ public final class ServerSupervisor {
 			return
 		}
 
-		guard
-			address.isLoopback,
-			let record = records.load(),
-			record.port == address.port,
-			// A record whose app is still running belongs to that copy, and stopping its
-			// server would take the stack out from under it.
-			record.owner == owner || !runner.isRunning(record.owner),
-			let existing = runner.adopt(group: record.group, names: launchNames)
-		else {
+		guard address.isLoopback, takeOver(port: address.port) else {
 			state = .running(owned: false)
 			return
 		}
+	}
+
+	/// Takes a recorded server over, under the same claim a launch takes, and writes this
+	/// app into the record. Ownership that is not written down is ownership two copies can
+	/// both believe they have, and either quitting would stop the stack under the other.
+	private func takeOver(port: Int) -> Bool {
+		guard let claim = records.claimLaunch() else { return false }
+
+		defer { _ = claim }
+
+		guard
+			let recorded = records.load(),
+			recorded.port == port,
+			// A record whose app is still running belongs to that copy, and stopping its
+			// server would take the stack out from under it.
+			recorded.owner == owner || !runner.isRunning(recorded.owner),
+			let existing = runner.adopt(group: recorded.group, names: launchNames)
+		else { return false }
+
+		let mine = ServerRecord(group: recorded.group, port: recorded.port, owner: owner)
+
+		do {
+			try records.save(mine)
+		} catch {
+			log.append("Could not take the server over: \(error.localizedDescription)")
+			return false
+		}
 
 		server = existing
-		self.record = record
+		record = mine
 		state = .running(owned: true)
 		watch(existing)
+
+		return true
 	}
 
 	/// What the app would have spawned: process-compose itself, or the script configured to
@@ -296,13 +317,7 @@ public final class ServerSupervisor {
 				return
 			}
 
-			if let recovered = runner.adopt(group: recorded.group, names: launchNames) {
-				server = recovered
-				record = recorded
-				state = .running(owned: true)
-				watch(recovered)
-				return
-			}
+			if takeOver(port: plan.port) { return }
 		}
 
 		do {
