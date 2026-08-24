@@ -55,6 +55,7 @@ struct ServerLaunchTests {
 
 		let environment = plan.environment([
 			"PC_NO_SERVER": "1",
+			"PC_SOCKET_PATH": "/tmp/process-compose.sock",
 			"PC_API_TOKEN": "secret",
 			"PC_API_TOKEN_PATH": "/Users/dev/.pc-token",
 			"PC_READ_ONLY": "1",
