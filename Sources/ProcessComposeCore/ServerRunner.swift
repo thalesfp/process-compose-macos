@@ -164,7 +164,8 @@ final class SpawnedServerProcess: ServerProcess {
 		)
 
 		// A stack can print faster than the pane reads, and the log's own limit cannot hold
-		// back a queue in front of it.
+		// back a queue in front of it. Each line is capped on the way in, so this count is a
+		// bound on bytes as well.
 		let (lines, lineFeed) = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(4096))
 		let (codes, codeFeed) = AsyncStream<Int32>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
@@ -175,7 +176,9 @@ final class SpawnedServerProcess: ServerProcess {
 		Task.detached {
 			let buffer = LineBuffer()
 			started.drain { data in
-				for line in buffer.take(data) { lineFeed.yield(line) }
+				for line in buffer.take(data) {
+					lineFeed.yield(String(line.prefix(LogBuffer.longestLine)))
+				}
 			}
 			lineFeed.finish()
 
@@ -345,6 +348,45 @@ enum UnixProcess {
 		}
 
 		return entries.prefix(size / MemoryLayout<kinfo_proc>.stride).map(\.kp_proc.p_pid)
+	}
+
+	/// The groups of everything the group's processes started. process-compose gives each
+	/// service a group of its own, and once its leader is gone nothing links them back.
+	static func descendantGroups(of group: pid_t) -> Set<pid_t> {
+		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
+		var size = 0
+
+		guard sysctl(&request, UInt32(request.count), nil, &size, nil, 0) == 0, size > 0 else {
+			return []
+		}
+
+		var entries = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride)
+
+		guard sysctl(&request, UInt32(request.count), &entries, &size, nil, 0) == 0 else { return [] }
+
+		let all = entries.prefix(size / MemoryLayout<kinfo_proc>.stride)
+		var children: [pid_t: [kinfo_proc]] = [:]
+		for entry in all { children[entry.kp_eproc.e_ppid, default: []].append(entry) }
+
+		var groups: Set<pid_t> = []
+		var pending = all.filter { $0.kp_eproc.e_pgid == group }.map(\.kp_proc.p_pid)
+
+		var seen: Set<pid_t> = Set(pending)
+
+		while let parent = pending.popLast() {
+			for child in children[parent] ?? [] {
+				let pid = child.kp_proc.p_pid
+
+				guard seen.insert(pid).inserted else { continue }
+
+				groups.insert(child.kp_eproc.e_pgid)
+				pending.append(pid)
+			}
+		}
+
+		groups.remove(group)
+
+		return groups
 	}
 
 	/// When the process began, in microseconds, or nothing when there is no such process.

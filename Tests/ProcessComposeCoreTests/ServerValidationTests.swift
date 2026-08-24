@@ -408,3 +408,36 @@ private final class RecoveredServer: ServerProcess {
 	func terminate() { isRunning = false }
 	func kill() { isRunning = false }
 }
+
+@MainActor
+struct ManagedGroupTests {
+	@Test("stops a service the server put in a group of its own")
+	func stopsAServiceInItsOwnGroup() async throws {
+		let directory = try scratchDirectory("managed")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The service leads a group of its own while staying a child, which is how
+		// process-compose runs one, so a signal to the launch group alone never reaches it.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 30
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let service = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		let launch = server.pid
+		await until { UnixProcess.descendantGroups(of: launch).contains(service) }
+
+		server.kill()
+		await until { kill(service, 0) != 0 }
+
+		#expect(kill(service, 0) != 0)
+	}
+}

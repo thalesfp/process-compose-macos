@@ -226,13 +226,14 @@ public final class ServerSupervisor {
 		!Task.isCancelled && mine == generation
 	}
 
-	private func attach(on address: ServerAddress) {
+	/// `held` is the claim the caller already has, if any.
+	private func attach(on address: ServerAddress, under held: ServerLaunchClaim? = nil) {
 		if let server, server.isRunning {
 			state = .running(owned: true)
 			return
 		}
 
-		guard address.isLoopback, takeOver(port: address.port, under: nil) else {
+		guard address.isLoopback, takeOver(port: address.port, under: held) else {
 			state = .running(owned: false)
 			return
 		}
@@ -307,7 +308,7 @@ public final class ServerSupervisor {
 		if let address, await reachability.isReachable(address) {
 			guard isCurrent(mine) else { return }
 
-			attach(on: address)
+			attach(on: address, under: claim)
 			return
 		}
 

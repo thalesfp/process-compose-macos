@@ -94,3 +94,15 @@ struct LogViewModelTests {
 		#expect(viewModel.lines.first?.spans.first?.color == .green)
 	}
 }
+
+@MainActor
+struct LogBufferBoundsTests {
+	@Test("keeps a single enormous line from filling the buffer")
+	func capsOneLine() {
+		var buffer = LogBuffer(maxLines: 10)
+
+		buffer.append(String(repeating: "x", count: 200_000))
+
+		#expect(buffer.lines.first!.text.count <= LogBuffer.longestLine + 1)
+	}
+}

@@ -14,6 +14,10 @@ public struct LogBuffer: Sendable {
 		}
 	}
 
+	/// A line the pane can show is short; a stack that prints a megabyte on one line would
+	/// otherwise be held whole, and the line count alone does not bound that.
+	static let longestLine = 4096
+
 	private var limit: Int
 	private var nextID = 0
 
@@ -22,7 +26,9 @@ public struct LogBuffer: Sendable {
 	}
 
 	public mutating func append(_ text: String) {
-		lines.append(LogLine(id: nextID, spans: AnsiParser.spans(in: text)))
+		let kept = text.count > Self.longestLine ? String(text.prefix(Self.longestLine)) + "…" : text
+
+		lines.append(LogLine(id: nextID, spans: AnsiParser.spans(in: kept)))
 		nextID += 1
 		trim()
 	}

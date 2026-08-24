@@ -11,6 +11,7 @@ final class GroupedProcess: @unchecked Sendable {
 	private let lock = NSLock()
 	private var reaped = false
 	private var finished = false
+	private var managed: Set<pid_t> = []
 
 	private let isOurs: Bool
 
@@ -120,7 +121,13 @@ final class GroupedProcess: @unchecked Sendable {
 	/// Whether anything in the group is still there. A wrapper that starts the server and
 	/// exits leaves the work behind it, so the leader going is not the group going.
 	var hasMembers: Bool {
-		kill(-pid, 0) == 0
+		if kill(-pid, 0) == 0 { return true }
+
+		lock.lock()
+		let known = managed
+		lock.unlock()
+
+		return known.contains { kill(-$0, 0) == 0 }
 	}
 
 	/// Whether the child is over, without reaping it.
@@ -197,18 +204,27 @@ final class GroupedProcess: @unchecked Sendable {
 	/// Reaping the leader is not the end of the group: a wrapper that starts the server and
 	/// exits is reaped while the stack it left behind still has to be signalled. The id is
 	/// only free for reuse once nothing is left, so that is what closes signalling.
+	///
+	/// process-compose puts each process it runs in a group of its own, so its services are
+	/// not in this one. They are noted on the way past and signalled too, since by the time
+	/// the leader is gone nothing points at them any more.
 	func signal(_ number: Int32) {
 		lock.lock()
 		defer { lock.unlock() }
 
 		guard !finished else { return }
 
-		guard kill(-pid, 0) == 0 else {
-			finished = true
-			return
-		}
+		managed.formUnion(UnixProcess.descendantGroups(of: pid))
 
-		kill(-pid, number)
+		let ours = kill(-pid, 0) == 0
+
+		if ours { kill(-pid, number) }
+
+		for group in managed { kill(-group, number) }
+
+		if !ours, !managed.contains(where: { kill(-$0, 0) == 0 }) {
+			finished = true
+		}
 	}
 }
 
