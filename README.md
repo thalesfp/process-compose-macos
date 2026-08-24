@@ -48,8 +48,10 @@ same check before it starts a server, so a config that will not load says why in
 a server that exits.
 
 A server that is already answering the port is left alone: the app attaches to it and never
-stops it, and it fills the config path in from that server, so a stack started from a
-terminal can be started from the app the next time.
+stops it. It takes the config path from that server as a suggestion and fills the setup
+sheet in with it, so a stack started from a terminal is a Save away from being startable
+here. Nothing is ever run from that suggestion until it is checked and saved, since anything
+at all can answer a port.
 
 ## Stopping and starting the stack
 

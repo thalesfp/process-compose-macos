@@ -13,6 +13,9 @@ enum PreferenceKey {
 	static let selectedProject = "selectedProject"
 	static let serverBinaryPath = "serverBinaryPath"
 	static let serverConfigPath = "serverConfigPath"
+	/// What an attached server said its config was. Only a suggestion: the app runs the
+	/// config the user saved, since whatever answers the port could name any file it likes.
+	static let suggestedConfigPath = "suggestedConfigPath"
 	static let serverWorkingDirectory = "serverWorkingDirectory"
 	static let sidebarVisible = "sidebarVisible"
 }
@@ -27,4 +30,5 @@ enum PreferenceDefault {
 	static let serverBinaryPath = ServerBinary.discover() ?? ""
 	static let serverConfigPath = ""
 	static let serverWorkingDirectory = ""
+	static let suggestedConfigPath = ""
 }

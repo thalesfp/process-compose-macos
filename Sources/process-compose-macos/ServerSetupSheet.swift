@@ -8,6 +8,7 @@ struct ServerSetupSheet: View {
 	@AppStorage(PreferenceKey.serverConfigPath) private var configPath = PreferenceDefault.serverConfigPath
 	@AppStorage(PreferenceKey.serverWorkingDirectory) private var workingDirectory = PreferenceDefault.serverWorkingDirectory
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
+	@AppStorage(PreferenceKey.suggestedConfigPath) private var suggestedConfig = PreferenceDefault.suggestedConfigPath
 
 	@Environment(\.dismiss) private var dismiss
 
@@ -70,7 +71,9 @@ struct ServerSetupSheet: View {
 		.frame(width: 560)
 		.task {
 			draftBinary = binaryPath
-			draftConfig = configPath
+			// The server the app connected to said this was its config. Nothing is run from
+			// it until it is checked and saved here, since anything can answer a port.
+			draftConfig = configPath.isEmpty ? suggestedConfig : configPath
 			draftWorkingDirectory = workingDirectory
 		}
 	}

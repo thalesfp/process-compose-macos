@@ -20,6 +20,7 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.serverBinaryPath) private var binaryPath = PreferenceDefault.serverBinaryPath
 	@AppStorage(PreferenceKey.serverConfigPath) private var configPath = PreferenceDefault.serverConfigPath
 	@AppStorage(PreferenceKey.serverWorkingDirectory) private var workingDirectory = PreferenceDefault.serverWorkingDirectory
+	@AppStorage(PreferenceKey.suggestedConfigPath) private var suggestedConfig = PreferenceDefault.suggestedConfigPath
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 
 	@State private var isShowingServerLog = false
@@ -58,7 +59,7 @@ struct StackView: View {
 		.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
 		.onChange(of: model.project?.configFiles ?? []) { _, files in
 			ServerLaunchPlan.learnedConfiguration(from: files, current: configPath)
-				.map { configPath = $0 }
+				.map { suggestedConfig = $0 }
 		}
 		.onChange(of: model.connection) { _, connection in
 			guard case .disconnected = connection else { return }
@@ -211,7 +212,9 @@ struct StackView: View {
 		switch server.state {
 		case .failed(let reason): reason
 		case .unconfigured:
-			"Choose the config for this stack and the app starts it from here. It reconnects on its own if you run the stack yourself."
+			suggestedConfig.isEmpty
+				? "Choose the config for this stack and the app starts it from here. It reconnects on its own if you run the stack yourself."
+				: "Set the server up to start this stack from here. It reconnects on its own if you run the stack yourself."
 		case .remote:
 			"The app only starts a server on this machine. Run the stack on \(host), or point Settings at localhost."
 		case .idle, .running:
