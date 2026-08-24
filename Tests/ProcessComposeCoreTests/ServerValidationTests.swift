@@ -265,6 +265,20 @@ extension ServerProcessTests {
 
 @MainActor
 struct ServerRecordStoreTests {
+	@Test("never waits on a claim this process already holds")
+	func claimDoesNotWaitOnItself() throws {
+		let directory = try scratchDirectory("claims")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
+		let held = try #require(store.claimLaunch())
+
+		// A wait here would be a wait on this same process, which nothing could end.
+		#expect(store.claimLaunch() == nil)
+
+		_ = held
+	}
+
 	@Test("keeps a record another copy of the app wrote in its place")
 	func clearsOnlyItsOwnRecord() throws {
 		let directory = try scratchDirectory("records")

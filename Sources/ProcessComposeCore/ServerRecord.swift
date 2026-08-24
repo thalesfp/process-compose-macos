@@ -60,7 +60,9 @@ public final class ServerLaunchClaim: Sendable {
 
 		guard gate >= 0 else { return nil }
 
-		guard flock(gate, LOCK_EX) == 0 else {
+		// Never blocking: this can be reached from the main actor while another task of this
+		// same process holds the claim across an await, and a wait would be a wait on itself.
+		guard flock(gate, LOCK_EX | LOCK_NB) == 0 else {
 			close(gate)
 			return nil
 		}

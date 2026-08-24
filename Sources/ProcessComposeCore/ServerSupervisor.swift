@@ -58,6 +58,7 @@ public final class ServerSupervisor {
 	private var server: (any ServerProcess)?
 	private var watchTask: Task<Void, Never>?
 	private var stopTask: Task<Void, Never>?
+	private var launchTask: Task<Void, Never>?
 	private var record: ServerRecord?
 	private var plan: ServerLaunchPlan?
 	private var address: ServerAddress?
@@ -139,7 +140,7 @@ public final class ServerSupervisor {
 			return
 		}
 
-		await start(plan, generation: mine)
+		await launch(plan, generation: mine)
 	}
 
 	/// Starts the configured server on request, after a failure or after the user stopped it.
@@ -148,7 +149,7 @@ public final class ServerSupervisor {
 
 		generation += 1
 
-		await start(plan, generation: generation)
+		await launch(plan, generation: generation)
 	}
 
 	/// The stack went away. A server the app started reports its own exit, but one started
@@ -304,6 +305,33 @@ public final class ServerSupervisor {
 		}
 	}
 
+	/// One launch at a time. A second attempt while the first is still deciding would race it
+	/// for the claim, and the claim is the thing that says only one server starts.
+	private func launch(_ plan: ServerLaunchPlan, generation mine: Int) async {
+		if let launchTask { await launchTask.value }
+
+		guard isCurrent(mine), server == nil else { return }
+
+		let launching = Task { await self.start(plan, generation: mine) }
+		launchTask = launching
+		await launching.value
+		launchTask = nil
+	}
+
+	/// The claim never waits, so a copy of the app that is a moment ahead is given time
+	/// rather than reported as a conflict at once.
+	private func claimLaunch() async -> ServerLaunchClaim? {
+		for attempt in 0 ..< 10 {
+			if let claim = records.claimLaunch() { return claim }
+
+			guard attempt < 9 else { break }
+
+			try? await Task.sleep(for: .milliseconds(200))
+		}
+
+		return nil
+	}
+
 	private func start(_ plan: ServerLaunchPlan, generation mine: Int) async {
 		let validation = await runner.validate(plan)
 
@@ -319,10 +347,12 @@ public final class ServerSupervisor {
 		// claim is held from that last look until the record is written.
 		// Without the claim there is no exclusion between copies of the app, and without the
 		// record a crash leaves the stack unrecoverable. Neither is worth starting without.
-		guard let claim = records.claimLaunch() else {
+		guard let claim = await claimLaunch() else {
 			state = .failed(reason: "Could not claim the right to start a server")
 			return
 		}
+
+		guard isCurrent(mine) else { return }
 
 		if let address, await reachability.isReachable(address) {
 			guard isCurrent(mine) else { return }
