@@ -106,8 +106,8 @@ private final class Answer: @unchecked Sendable {
 /// The script records its child as it starts, which under load can be after the check that
 /// spawned it has already been given up on. The file appears before it holds the number, so
 /// what is waited for is a number.
-private func recordedChild(in file: URL) async throws -> String {
-	await until { pid(in: file) != nil }
+private func recordedChild(in file: URL, within limit: Duration = .seconds(10)) async throws -> String {
+	await until({ pid(in: file) != nil }, within: limit)
 
 	guard let recorded = pid(in: file) else { return "" }
 
@@ -616,6 +616,53 @@ struct ManagedGroupTests {
 
 		server.kill()
 		await until { kill(service, 0) != 0 }
+	}
+
+	@Test("finds a service started long after the stack moved out of its launch group")
+	func findsAServiceStartedLater() async throws {
+		let directory = try scratchDirectory("later")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The server moves into a group of its own, the launcher goes, and only well after
+		// the close watching has stopped does the server start a service.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e '
+				setpgrp(0,0);
+				select(undef, undef, undef, 6);
+				my $pid = fork();
+				if ($pid == 0) { exec("sleep", "30"); }
+				open(my $out, ">", "$ARGV[0]/service.pid"); print $out $pid; close($out);
+				sleep 30;
+			' "$(dirname "$0")" >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 0.5
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		_ = try await recordedChild(in: directory.appendingPathComponent("child.pid"))
+
+		let service = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("service.pid"), within: .seconds(30)))
+		)
+
+		var found = false
+		let deadline = ContinuousClock.now.advanced(by: .seconds(20))
+
+		while !found, ContinuousClock.now < deadline {
+			found = server.membership.values.contains { $0.contains { $0.pid == service } }
+
+			if !found { try await Task.sleep(for: .milliseconds(100)) }
+		}
+
+		#expect(found)
+
+		server.kill()
+		await until { kill(service, 0) != 0 }
+
+		#expect(kill(service, 0) != 0)
 	}
 
 	@Test("stops a service the server put in a group of its own")

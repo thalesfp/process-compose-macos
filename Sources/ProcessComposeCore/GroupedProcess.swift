@@ -193,7 +193,14 @@ final class GroupedProcess: @unchecked Sendable {
 
 		guard due else { return }
 
-		let found = UnixProcess.groups(under: pid)
+		lock.lock()
+		let seeds = Set(known.values.flatMap { $0 }.filter(\.isRunning).map(\.pid))
+		let seedGroups = Set(known.keys).union([pid])
+		lock.unlock()
+
+		// Seeded from everything known to be alive, not only the launch group: a stack that
+		// moved out of it goes on starting services from wherever it is now.
+		let found = UnixProcess.groups(from: seeds, groups: seedGroups)
 
 		lock.lock()
 		for (group, members) in found {

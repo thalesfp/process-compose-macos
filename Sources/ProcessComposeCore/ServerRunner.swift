@@ -393,10 +393,14 @@ enum UnixProcess {
 
 	/// The groups of everything the group's processes started. process-compose gives each
 	/// service a group of its own, and once its leader is gone nothing links them back.
-	/// Every group under this one, the group itself included, with the identities of the
-	/// members holding each. An identity is a pid and the moment it began, which is what
-	/// separates a group from a later one that reuses its number.
 	static func groups(under group: pid_t) -> [pid_t: Set<ServerOwner>] {
+		groups(from: [], groups: [group])
+	}
+
+	/// Every group reachable from the processes given, with the identities holding each. The
+	/// walk starts from named processes as well as whole groups, since a stack can move out
+	/// of the group it was started in and go on starting services from there.
+	static func groups(from seeds: Set<pid_t>, groups seedGroups: Set<pid_t>) -> [pid_t: Set<ServerOwner>] {
 		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
 		var size = 0
 
@@ -427,7 +431,8 @@ enum UnixProcess {
 			)
 		}
 
-		for entry in all where entry.kp_eproc.e_pgid == group {
+		for entry in all
+		where seedGroups.contains(entry.kp_eproc.e_pgid) || seeds.contains(entry.kp_proc.p_pid) {
 			note(entry)
 			seen.insert(entry.kp_proc.p_pid)
 			pending.append(entry.kp_proc.p_pid)
