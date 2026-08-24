@@ -232,7 +232,7 @@ public final class ServerSupervisor {
 			return
 		}
 
-		guard address.isLoopback, takeOver(port: address.port) else {
+		guard address.isLoopback, takeOver(port: address.port, under: nil) else {
 			state = .running(owned: false)
 			return
 		}
@@ -241,8 +241,12 @@ public final class ServerSupervisor {
 	/// Takes a recorded server over, under the same claim a launch takes, and writes this
 	/// app into the record. Ownership that is not written down is ownership two copies can
 	/// both believe they have, and either quitting would stop the stack under the other.
-	private func takeOver(port: Int) -> Bool {
-		guard let claim = records.claimLaunch() else { return false }
+	/// `held` is the claim the caller already has. Taking a second one for the same file
+	/// would wait on a lock this process is holding, which is a wait that never ends.
+	private func takeOver(port: Int, under held: ServerLaunchClaim?) -> Bool {
+		let claim = held ?? records.claimLaunch()
+
+		guard claim != nil else { return false }
 
 		defer { _ = claim }
 
@@ -317,7 +321,7 @@ public final class ServerSupervisor {
 				return
 			}
 
-			if takeOver(port: plan.port) { return }
+			if takeOver(port: plan.port, under: claim) { return }
 		}
 
 		do {

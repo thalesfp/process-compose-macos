@@ -330,3 +330,81 @@ private func wrapper(in directory: URL, _ body: String) throws -> ServerLaunchPl
 		port: 28080
 	)!
 }
+
+@MainActor
+struct ServerRecoveryTests {
+	@Test("recovers a recorded server without waiting on a lock it already holds")
+	func recoversUnderTheRealStore() async throws {
+		let directory = try scratchDirectory("recovery")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
+		try store.save(ServerRecord(group: 4242, port: 28080, owner: ServerOwner(pid: 900, startedAt: 111)))
+
+		let supervisor = ServerSupervisor(
+			runner: RecordedRunner(),
+			reachability: NeverReachable(),
+			records: store,
+			owner: ServerOwner(pid: 901, startedAt: 222)
+		)
+
+		// A deadlock here would hang the suite, so the wait has a deadline of its own.
+		let recovering = Task { await supervisor.use(address: .standard, plan: try plan(in: directory)) }
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while supervisor.state != .running(owned: true), ContinuousClock.now < deadline {
+			await Task.yield()
+			try? await Task.sleep(for: .milliseconds(20))
+		}
+
+		_ = try? await recovering.value
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(store.load()?.owner.pid == 901)
+	}
+}
+
+private func plan(in directory: URL) throws -> ServerLaunchPlan {
+	try wrapper(in: directory, "sleep 0")
+}
+
+private struct NeverReachable: ServerReachability {
+	func isReachable(_ address: ServerAddress) async -> Bool { false }
+}
+
+@MainActor
+private struct RecordedRunner: ServerRunner {
+	func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess {
+		Issue.record("the recorded server should have been recovered instead of relaunched")
+
+		return try LiveServerRunner().run(plan)
+	}
+
+	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation { .valid }
+
+	func isRunning(_ owner: ServerOwner) -> Bool { false }
+
+	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
+		RecoveredServer(pid: group)
+	}
+}
+
+@MainActor
+private final class RecoveredServer: ServerProcess {
+	let pid: Int32
+	let output = AsyncStream<String> { $0.finish() }
+
+	var isRunning = true
+
+	init(pid: Int32) {
+		self.pid = pid
+	}
+
+	func exitCode() async -> Int32 {
+		while isRunning { try? await Task.sleep(for: .milliseconds(50)) }
+		return 0
+	}
+
+	func terminate() { isRunning = false }
+	func kill() { isRunning = false }
+}
