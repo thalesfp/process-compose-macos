@@ -497,8 +497,14 @@ public final class ServerSupervisor {
 		watchTask?.cancel()
 		watchTask = Task { [weak self] in
 			let following = Task { [weak self] in
+				// A wrapper hands over within milliseconds, and a crash before that reached
+				// the record would leave it naming a process that has gone.
+				let closely = ContinuousClock.now.advanced(by: .seconds(5))
+
 				while !Task.isCancelled {
-					try? await Task.sleep(for: .seconds(3))
+					let interval: Duration = ContinuousClock.now < closely ? .milliseconds(100) : .seconds(3)
+
+					try? await Task.sleep(for: interval)
 					self?.rememberMembers(of: started)
 				}
 			}
