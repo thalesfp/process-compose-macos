@@ -248,11 +248,13 @@ extension ServerProcessTests {
 			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
 		)
 
-		// What the record would hold: what the stack was seen holding while it was starting.
+		// What the record would hold: the stack as it was seen while it was still starting,
+		// which is what the supervisor writes and keeps refreshed.
 		var recorded = started.membership
 		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
 
-		while recorded.isEmpty, ContinuousClock.now < deadline {
+		while !recorded.values.contains(where: { $0.contains { $0.pid == child } }),
+			ContinuousClock.now < deadline {
 			try await Task.sleep(for: .milliseconds(20))
 			recorded = started.membership
 		}

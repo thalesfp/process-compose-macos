@@ -116,6 +116,12 @@ public final class ServerSupervisor {
 		// must not get that far.
 		guard !Task.isCancelled else { return }
 
+		// A shutdown can take a minute, and the settings can come back to where they started
+		// in that time. Waiting here is what keeps the two from overlapping.
+		if let stopTask { await stopTask.value }
+
+		guard !Task.isCancelled else { return }
+
 		if address != self.address || plan != self.plan {
 			await stop()
 
@@ -207,6 +213,8 @@ public final class ServerSupervisor {
 			return
 		}
 
+		let stopping = server
+
 		server.terminate()
 		await waitForExit(of: server)
 
@@ -221,6 +229,10 @@ public final class ServerSupervisor {
 			state = .failed(reason: "The stack is still running and could not be stopped")
 			return
 		}
+
+		// Another server may have been started while this one was being stopped, and it is
+		// not this shutdown's to retire.
+		guard self.server === stopping else { return }
 
 		release()
 	}

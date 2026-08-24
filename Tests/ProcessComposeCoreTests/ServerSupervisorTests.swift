@@ -678,6 +678,32 @@ struct ServerSupervisorTests {
 		#expect(runner.started?.didKill == true)
 	}
 
+	@Test("does not let a finished shutdown retire the server that replaced it")
+	func aFinishedShutdownLeavesTheReplacementAlone() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		let records = MemoryRecordStore()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			grace: .milliseconds(100)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		let first = runner.started
+
+		// Away to another port and back again while the first is still stopping.
+		let other = ServerAddress(host: "localhost", port: 28081)!
+		await supervisor.use(address: other, plan: .test)
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(records.record != nil)
+		#expect(runner.started !== first)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
