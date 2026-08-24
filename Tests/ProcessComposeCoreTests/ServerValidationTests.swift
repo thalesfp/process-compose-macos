@@ -577,6 +577,45 @@ struct ManagedGroupTests {
 		await until { kill(service, 0) != 0 }
 	}
 
+	@Test("forgets a group once what it was holding has moved on")
+	func forgetsAGroupItsMembersHaveLeft() async throws {
+		let directory = try scratchDirectory("moved")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The service starts inside the launch group and then leaves it, which is how it is
+		// first seen under a group it no longer belongs to.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e 'select(undef, undef, undef, 0.2); setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 30
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let service = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		await until { UnixProcess.group(of: service) == service }
+
+		var held = server.membership
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while held[service] == nil, ContinuousClock.now < deadline {
+			try await Task.sleep(for: .milliseconds(20))
+			held = server.membership
+		}
+
+		// Recorded under the group it leads now, not the one it was born in.
+		#expect(held[service]?.contains { $0.pid == service } == true)
+		#expect(held.values.flatMap { $0 }.filter { $0.pid == service }.count == 1)
+
+		server.kill()
+		await until { kill(service, 0) != 0 }
+	}
+
 	@Test("stops a service the server put in a group of its own")
 	func stopsAServiceInItsOwnGroup() async throws {
 		let directory = try scratchDirectory("managed")

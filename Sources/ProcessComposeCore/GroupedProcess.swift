@@ -275,12 +275,10 @@ final class GroupedProcess: @unchecked Sendable {
 		let live = liveMembers()
 
 		if reach == .everything {
-			// Each member itself and the group it leads: a service remembered from before it
-			// moved into a group of its own would be missed by a signal to that old group.
-			for member in live {
-				kill(member.pid, number)
-				kill(-member.pid, number)
-			}
+			// Each member by name, since one remembered from before it moved would be missed
+			// by a signal to the group it was in then; and each group that still holds one of
+			// them, which is what reaches anything started since.
+			for member in live { kill(member.pid, number) }
 
 			for group in liveGroups() { kill(-group, number) }
 		} else if liveGroups().contains(pid) {
@@ -298,9 +296,11 @@ final class GroupedProcess: @unchecked Sendable {
 		lock.lock()
 		defer { lock.unlock() }
 
-		_ = liveMembers()
+		// Pruning is what drops a process from the group it has left, so this reports each
+		// one under the group holding it now.
+		_ = liveGroups()
 
-		return known.mapValues { $0.filter(\.isRunning) }.filter { !$0.value.isEmpty }
+		return known
 	}
 
 	/// Everything seen under the launch group that is still the process it was. The kernel
@@ -329,10 +329,16 @@ final class GroupedProcess: @unchecked Sendable {
 		var live: [pid_t] = []
 
 		for (group, members) in known {
-			if members.contains(where: \.isRunning) {
-				live.append(group)
-			} else {
+			// Still running, and still in this group. A process that has moved on says
+			// nothing about who holds the number it left, and the number is handed out again
+			// once the group is empty.
+			let present = members.filter { $0.isRunning && UnixProcess.group(of: $0.pid) == group }
+
+			if present.isEmpty {
 				known[group] = nil
+			} else {
+				known[group] = present
+				live.append(group)
 			}
 		}
 
