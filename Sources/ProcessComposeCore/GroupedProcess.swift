@@ -11,9 +11,12 @@ final class GroupedProcess: @unchecked Sendable {
 	private let lock = NSLock()
 	private var reaped = false
 
-	private init(pid: pid_t, output: Int32) {
+	private let isOurs: Bool
+
+	private init(pid: pid_t, output: Int32, isOurs: Bool = true) {
 		self.pid = pid
 		self.output = output
+		self.isOurs = isOurs
 	}
 
 	enum SpawnFailure: Error, LocalizedError {
@@ -25,6 +28,22 @@ final class GroupedProcess: @unchecked Sendable {
 			case .pipe(let code), .spawn(let code): String(cString: strerror(code))
 			}
 		}
+	}
+
+	/// Takes hold of a group an earlier run left behind. POSIX only reserves a group id
+	/// while the group lives, so a record that outlived its group can name an unrelated one:
+	/// a member has to be recognised before anything is signalled. Nothing is reaped here,
+	/// since this process never forked it.
+	static func adopt(group: pid_t, names: Set<String>) -> GroupedProcess? {
+		guard group > 0, kill(-group, 0) == 0 else { return nil }
+
+		let members = UnixProcess.members(of: group)
+
+		guard members.contains(where: { names.contains(UnixProcess.name(of: $0) ?? "") }) else {
+			return nil
+		}
+
+		return GroupedProcess(pid: group, output: -1, isOurs: false)
 	}
 
 	static func run(
@@ -69,7 +88,7 @@ final class GroupedProcess: @unchecked Sendable {
 			throw SpawnFailure.spawn(started)
 		}
 
-		return GroupedProcess(pid: pid, output: reading)
+		return GroupedProcess(pid: pid, output: reading, isOurs: true)
 	}
 
 	/// Everything the child printed. Ends when the last writer closes the pipe, which
@@ -129,6 +148,12 @@ final class GroupedProcess: @unchecked Sendable {
 		var info = siginfo_t()
 
 		while true {
+			guard isOurs else {
+				if !hasMembers { return }
+				usleep(interval)
+				continue
+			}
+
 			lock.lock()
 			let done = reaped
 			lock.unlock()
@@ -150,7 +175,8 @@ final class GroupedProcess: @unchecked Sendable {
 		lock.lock()
 		defer { lock.unlock() }
 
-		guard !reaped else { return -1 }
+		// waitpid answers only for a child of this process, and an adopted group is not one.
+		guard isOurs, !reaped else { return -1 }
 
 		var raw: Int32 = 0
 		waitpid(pid, &raw, 0)

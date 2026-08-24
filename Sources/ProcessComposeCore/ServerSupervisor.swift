@@ -58,6 +58,7 @@ public final class ServerSupervisor {
 	private var server: (any ServerProcess)?
 	private var watchTask: Task<Void, Never>?
 	private var stopTask: Task<Void, Never>?
+	private var record: ServerRecord?
 	private var plan: ServerLaunchPlan?
 	private var address: ServerAddress?
 	private var generation = 0
@@ -238,15 +239,24 @@ public final class ServerSupervisor {
 			// A record whose app is still running belongs to that copy, and stopping its
 			// server would take the stack out from under it.
 			record.owner == owner || !runner.isRunning(pid: record.owner),
-			let existing = runner.adopt(pid: record.pid)
+			let existing = runner.adopt(group: record.group, names: launchNames)
 		else {
 			state = .running(owned: false)
 			return
 		}
 
 		server = existing
+		self.record = record
 		state = .running(owned: true)
 		watch(existing)
+	}
+
+	/// What the app would have spawned: process-compose itself, or the script configured to
+	/// run it.
+	private var launchNames: Set<String> {
+		["process-compose", plan?.executable.lastPathComponent].compactMap { $0 }.reduce(into: Set()) {
+			$0.insert($1)
+		}
 	}
 
 	private func start(_ plan: ServerLaunchPlan, generation mine: Int) async {
@@ -259,11 +269,22 @@ public final class ServerSupervisor {
 			return
 		}
 
+		// Validation takes as long as the config does, and another copy of the app can claim
+		// the port while it runs, so the answer from before it is no longer good enough.
+		if let address, await reachability.isReachable(address) {
+			guard isCurrent(mine) else { return }
+
+			attach(on: address)
+			return
+		}
+
+		guard isCurrent(mine) else { return }
+
 		do {
 			let started = try runner.run(plan)
 
 			server = started
-			remember(ServerRecord(pid: started.pid, port: plan.port, owner: owner))
+			remember(ServerRecord(group: started.pid, port: plan.port, owner: owner))
 			state = .running(owned: true)
 			watch(started)
 		} catch {
@@ -308,6 +329,8 @@ public final class ServerSupervisor {
 
 	// Losing the record costs the next run its chance to take this server back.
 	private func remember(_ record: ServerRecord) {
+		self.record = record
+
 		do {
 			try records.save(record)
 		} catch {
@@ -316,8 +339,12 @@ public final class ServerSupervisor {
 	}
 
 	private func forget() {
+		guard let record else { return }
+
+		self.record = nil
+
 		do {
-			try records.clear()
+			try records.clear(record)
 		} catch {
 			log.append("Could not clear the server record: \(error.localizedDescription)")
 		}

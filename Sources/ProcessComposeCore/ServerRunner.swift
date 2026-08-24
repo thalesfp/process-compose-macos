@@ -24,9 +24,9 @@ public protocol ServerRunner {
 	func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess
 	/// Loads the config without running it, so a stack that cannot start says why first.
 	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation
-	/// Takes back a server recorded by an earlier run, or nil when that pid is gone or
-	/// belongs to something else now.
-	func adopt(pid: Int32) -> (any ServerProcess)?
+	/// Takes back a server recorded by an earlier run, or nil when its group is gone or now
+	/// holds processes none of `names` describes.
+	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)?
 	func isRunning(pid: Int32) -> Bool
 }
 
@@ -116,12 +116,10 @@ public struct LiveServerRunner: ServerRunner {
 		UnixProcess.isAlive(pid)
 	}
 
-	public func adopt(pid: Int32) -> (any ServerProcess)? {
-		// A pid is reused once the process behind it exits, so the name at that pid decides
-		// whether this is still the server the app started.
-		guard UnixProcess.isAlive(pid), UnixProcess.name(of: pid) == "process-compose" else { return nil }
+	public func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
+		guard let existing = GroupedProcess.adopt(group: group, names: names) else { return nil }
 
-		return AdoptedServerProcess(pid: pid)
+		return AdoptedServerProcess(existing)
 	}
 }
 
@@ -187,23 +185,26 @@ final class SpawnedServerProcess: ServerProcess {
 
 @MainActor
 final class AdoptedServerProcess: ServerProcess {
-	let pid: Int32
-
 	// The output of a server this app did not spawn went to the terminal that did.
 	let output = AsyncStream<String> { $0.finish() }
 
-	var isRunning: Bool { UnixProcess.isAlive(pid) }
+	private let group: GroupedProcess
+	private let pollInterval: Duration
 
-	init(pid: Int32) {
-		self.pid = pid
+	var pid: Int32 { group.pid }
+	var isRunning: Bool { group.hasMembers }
+
+	init(_ group: GroupedProcess, pollInterval: Duration = .seconds(1)) {
+		self.group = group
+		self.pollInterval = pollInterval
 	}
 
-	/// A process this one never forked reports no status to it, so the exit is only visible
-	/// as the pid going away.
+	/// A group this process never forked reports no status to it, so the end is only visible
+	/// as the last member going away.
 	func exitCode() async -> Int32 {
 		while isRunning {
 			do {
-				try await Task.sleep(for: .seconds(1), tolerance: .seconds(1))
+				try await Task.sleep(for: pollInterval, tolerance: pollInterval)
 			} catch {
 				return 0
 			}
@@ -212,11 +213,11 @@ final class AdoptedServerProcess: ServerProcess {
 	}
 
 	func terminate() {
-		Darwin.kill(pid, SIGTERM)
+		group.signal(SIGTERM)
 	}
 
 	func kill() {
-		Darwin.kill(pid, SIGKILL)
+		group.signal(SIGKILL)
 	}
 }
 
@@ -272,6 +273,25 @@ enum UnixProcess {
 		guard pid > 0 else { return false }
 		// A process owned by another user answers EPERM, which still means it is there.
 		return Darwin.kill(pid, 0) == 0 || errno == EPERM
+	}
+
+	/// Every process the group still holds.
+	static func members(of group: pid_t) -> [pid_t] {
+		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PGRP, group]
+		var size = 0
+
+		guard sysctl(&request, UInt32(request.count), nil, &size, nil, 0) == 0, size > 0 else {
+			return []
+		}
+
+		let count = size / MemoryLayout<kinfo_proc>.stride
+		var entries = [kinfo_proc](repeating: kinfo_proc(), count: count)
+
+		guard sysctl(&request, UInt32(request.count), &entries, &size, nil, 0) == 0 else {
+			return []
+		}
+
+		return entries.prefix(size / MemoryLayout<kinfo_proc>.stride).map(\.kp_proc.p_pid)
 	}
 
 	static func name(of pid: Int32) -> String? {

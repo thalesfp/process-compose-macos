@@ -187,6 +187,67 @@ struct ServerProcessTests {
 	}
 }
 
+extension ServerProcessTests {
+	@Test("takes back a wrapper-started stack after the app that started it is gone")
+	func adoptsTheGroupAfterACrash() async throws {
+		let directory = try scratchDirectory("crash")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The wrapper exits at once, so its pid is gone while the stack it started is not.
+		// The child lets go of the output pipe, which is what lets the wrapper be reaped.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			sleep 30 >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			"""
+		)
+
+		let runner = LiveServerRunner()
+		let started = try runner.run(plan)
+		let group = started.pid
+		let child = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		await until { !UnixProcess.isAlive(group) }
+
+		#expect(runner.adopt(group: group, names: ["process-compose"]) == nil)
+
+		let adopted = try #require(runner.adopt(group: group, names: ["sleep"]))
+
+		#expect(adopted.isRunning)
+
+		adopted.kill()
+		await until { kill(child, 0) != 0 }
+
+		#expect(kill(child, 0) != 0)
+	}
+}
+
+@MainActor
+struct ServerRecordStoreTests {
+	@Test("keeps a record another copy of the app wrote in its place")
+	func clearsOnlyItsOwnRecord() throws {
+		let directory = try scratchDirectory("records")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
+		let mine = ServerRecord(group: 100, port: 28080, owner: 900)
+		let theirs = ServerRecord(group: 200, port: 28080, owner: 901)
+
+		try store.save(mine)
+		try store.save(theirs)
+		try store.clear(mine)
+
+		#expect(store.load() == theirs)
+
+		try store.clear(theirs)
+
+		#expect(store.load() == nil)
+	}
+}
+
 private func scratchDirectory(_ name: String) throws -> URL {
 	let directory = FileManager.default.temporaryDirectory
 		.appendingPathComponent("\(name)-\(UUID().uuidString)", isDirectory: true)
