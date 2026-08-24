@@ -658,8 +658,8 @@ struct ServerSupervisorTests {
 	@Test("still takes down a server it could not record when the app quits at once")
 	func stopsAnUnrecordedServerOnQuit() async {
 		let runner = FakeRunner()
+		// Ignores the request to stop, so the quit has to force it.
 		runner.ignoresTerminate = true
-		runner.ignoresKill = true
 		let records = MemoryRecordStore()
 		records.savingFails = true
 		let supervisor = ServerSupervisor(
