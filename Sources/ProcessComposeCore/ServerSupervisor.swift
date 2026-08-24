@@ -76,6 +76,7 @@ public final class ServerSupervisor {
 	private var useInputs: Inputs?
 	private var useToken = 0
 	private var record: ServerRecord?
+	private var stopping: (any ServerProcess)?
 	private var plan: ServerLaunchPlan?
 	private var address: ServerAddress?
 	private var generation = 0
@@ -248,7 +249,10 @@ public final class ServerSupervisor {
 			return
 		}
 
-		let stopping = server
+		let leaving = server
+		stopping = leaving
+
+		defer { if stopping === leaving { stopping = nil } }
 
 		server.terminate()
 		await waitForExit(of: server)
@@ -266,8 +270,8 @@ public final class ServerSupervisor {
 		}
 
 		// Another server may have been started while this one was being stopped, and it is
-		// not this shutdown's to retire.
-		guard self.server === stopping else { return }
+		// not this shutdown's to retire. The watcher may already have let this one go.
+		guard self.server === leaving || self.server == nil else { return }
 
 		release()
 	}
@@ -546,8 +550,15 @@ public final class ServerSupervisor {
 
 			guard let self, self.server === started else { return }
 
+			let asked = self.stopping === started
+
 			self.server = nil
 			self.forget()
+
+			// A server that was asked to go reports whatever a signal made of it, and that is
+			// not a failure. The shutdown that asked says how it went.
+			guard !asked else { return }
+
 			self.state = code == 0 ? .idle : .failed(reason: "The server exited with status \(code)")
 		}
 	}

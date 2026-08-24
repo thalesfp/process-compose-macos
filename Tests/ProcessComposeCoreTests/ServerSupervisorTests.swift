@@ -831,6 +831,24 @@ struct ServerSupervisorTests {
 		#expect(supervisor.isOwned)
 	}
 
+	@Test("stopping a server on purpose is not a failure, whatever the signal made of it")
+	func aDeliberateStopIsNotAFailure() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		runner.started?.exitStatus = -1
+
+		await supervisor.stop()
+		await until { supervisor.state == .idle }
+
+		#expect(supervisor.state == .idle)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -1000,6 +1018,7 @@ private final class FakeServerProcess: ServerProcess {
 	var membership: [Int32: Set<ServerOwner>] { [pid: [ServerOwner(pid: pid, startedAt: Int64(pid))]] }
 
 	private(set) var isRunning = true
+	var exitStatus: Int32 = 0
 	private(set) var didTerminate = false
 	private(set) var didKill = false
 
@@ -1025,7 +1044,7 @@ private final class FakeServerProcess: ServerProcess {
 		while isRunning {
 			try? await Task.sleep(for: .milliseconds(1))
 		}
-		return 0
+		return exitStatus
 	}
 
 	func terminate() {
