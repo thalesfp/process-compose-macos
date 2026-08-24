@@ -57,9 +57,21 @@ final class GroupedProcess: @unchecked Sendable {
 			if !present.isEmpty { confirmed[recorded] = present }
 		}
 
-		guard confirmed[group] != nil else { return nil }
+		guard !confirmed.isEmpty else { return nil }
 
-		let taken = GroupedProcess(pid: group, output: -1, isOurs: false)
+		// The stack can have moved out of the group it was launched in, and then the group to
+		// ask to stop is the one holding what has been there longest: a server outlives the
+		// services it starts.
+		let leader =
+			confirmed[group] != nil
+			? group
+			: confirmed.min { left, right in
+				(left.value.map(\.startedAt).min() ?? 0) < (right.value.map(\.startedAt).min() ?? 0)
+			}?.key
+
+		guard let leader else { return nil }
+
+		let taken = GroupedProcess(pid: leader, output: -1, isOurs: false)
 		taken.known = confirmed
 
 		return taken

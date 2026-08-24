@@ -497,6 +497,18 @@ struct ManagedGroupTests {
 		)
 		let leader = server.pid
 
+		// Seen while the launcher is still there to point at it, which is the whole point.
+		var tracked = false
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while !tracked, ContinuousClock.now < deadline {
+			tracked = server.membership.values.contains { $0.contains { $0.pid == service } }
+
+			if !tracked { try await Task.sleep(for: .milliseconds(20)) }
+		}
+
+		#expect(tracked)
+
 		await until { !UnixProcess.isAlive(leader) }
 
 		#expect(server.isRunning)
@@ -663,6 +675,49 @@ struct ManagedGroupTests {
 		await until { kill(service, 0) != 0 }
 
 		#expect(kill(service, 0) != 0)
+	}
+
+	@Test("takes back a stack that had moved out of the group it was launched in")
+	func adoptsAStackThatMovedGroups() async throws {
+		let directory = try scratchDirectory("moved-crash")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The launcher hands over to a server in a group of its own and exits, so the group
+		// the stack was launched in is gone by the time it has to be taken back.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 0.5
+			"""
+		)
+
+		let runner = LiveServerRunner()
+		let started = try runner.run(plan)
+		let launchGroup = started.pid
+		let server = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		var recorded = started.membership
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while recorded[server] == nil, ContinuousClock.now < deadline {
+			try await Task.sleep(for: .milliseconds(20))
+			recorded = started.membership
+		}
+
+		await until { !UnixProcess.isAlive(launchGroup) }
+
+		let adopted = try #require(runner.adopt(group: launchGroup, members: recorded))
+
+		#expect(adopted.isRunning)
+
+		adopted.kill()
+		await until { kill(server, 0) != 0 }
+
+		#expect(kill(server, 0) != 0)
 	}
 
 	@Test("stops a service the server put in a group of its own")
