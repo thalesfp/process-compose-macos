@@ -7,8 +7,8 @@ import Foundation
 public protocol ServerProcess: AnyObject {
 	var pid: Int32 { get }
 	var isRunning: Bool { get }
-	/// The processes it is holding, so they can be recorded and recognised again later.
-	var members: Set<ServerOwner> { get }
+	/// What each of its groups is holding, so the stack can be recognised again later.
+	var membership: [Int32: Set<ServerOwner>] { get }
 	/// The server's own output, one line per element, finished when the server exits.
 	var output: AsyncStream<String> { get }
 	func exitCode() async -> Int32
@@ -28,7 +28,7 @@ public protocol ServerRunner {
 	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation
 	/// Takes back a server recorded by an earlier run, or nil when nothing it was recorded as
 	/// holding is still there.
-	func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)?
+	func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)?
 	func isRunning(_ owner: ServerOwner) -> Bool
 	/// Whether anything of a recorded group is left, without taking it over.
 	func isGroupRunning(_ group: Int32) -> Bool
@@ -144,7 +144,7 @@ public struct LiveServerRunner: ServerRunner {
 		group > 0 && Darwin.kill(-group, 0) == 0
 	}
 
-	public func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)? {
+	public func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)? {
 		guard let existing = GroupedProcess.adopt(group: group, members: members) else { return nil }
 
 		return AdoptedServerProcess(existing)
@@ -160,7 +160,7 @@ final class SpawnedServerProcess: ServerProcess {
 
 	var pid: Int32 { check.pid }
 	var isRunning: Bool { check.hasMembers }
-	var members: Set<ServerOwner> { check.members }
+	var membership: [Int32: Set<ServerOwner>] { check.membership }
 
 	init(_ plan: ServerLaunchPlan) throws {
 		// The binary can be a script that starts process-compose without replacing itself,
@@ -253,7 +253,7 @@ final class AdoptedServerProcess: ServerProcess {
 
 	var pid: Int32 { group.pid }
 	var isRunning: Bool { group.hasMembers }
-	var members: Set<ServerOwner> { group.members }
+	var membership: [Int32: Set<ServerOwner>] { group.membership }
 
 	init(_ group: GroupedProcess, pollInterval: Duration = .seconds(1)) {
 		self.group = group
@@ -438,6 +438,19 @@ enum UnixProcess {
 		}
 
 		return groups
+	}
+
+	/// The group a process is in now.
+	static func group(of pid: pid_t) -> pid_t? {
+		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+		var entry = kinfo_proc()
+		var size = MemoryLayout<kinfo_proc>.stride
+
+		guard sysctl(&request, UInt32(request.count), &entry, &size, nil, 0) == 0, size > 0 else {
+			return nil
+		}
+
+		return entry.kp_eproc.e_pgid
 	}
 
 	/// When the process began, in microseconds, or nothing when there is no such process.

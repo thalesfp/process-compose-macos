@@ -249,12 +249,12 @@ extension ServerProcessTests {
 		)
 
 		// What the record would hold: what the stack was seen holding while it was starting.
-		var recorded = started.members
+		var recorded = started.membership
 		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
 
 		while recorded.isEmpty, ContinuousClock.now < deadline {
 			try await Task.sleep(for: .milliseconds(20))
-			recorded = started.members
+			recorded = started.membership
 		}
 
 		await until { !UnixProcess.isAlive(group) }
@@ -263,7 +263,7 @@ extension ServerProcessTests {
 		// never recorded as holding is somebody else's group.
 		let stranger = ServerOwner(pid: 999_999, startedAt: 1)
 
-		#expect(runner.adopt(group: group, members: [stranger]) == nil)
+		#expect(runner.adopt(group: group, members: [group: [stranger]]) == nil)
 
 		let adopted = try #require(runner.adopt(group: group, members: recorded))
 
@@ -444,7 +444,7 @@ private struct RecordedRunner: ServerRunner {
 
 	func isGroupRunning(_ group: Int32) -> Bool { true }
 
-	func adopt(group: Int32, members: Set<ServerOwner>) -> (any ServerProcess)? {
+	func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)? {
 		RecoveredServer(pid: group)
 	}
 }
@@ -454,7 +454,7 @@ private final class RecoveredServer: ServerProcess {
 	let pid: Int32
 	let output = AsyncStream<String> { $0.finish() }
 
-	var members: Set<ServerOwner> { [ServerOwner(pid: pid, startedAt: Int64(pid))] }
+	var membership: [Int32: Set<ServerOwner>] { [pid: [ServerOwner(pid: pid, startedAt: Int64(pid))]] }
 	var isRunning = true
 
 	init(pid: Int32) {

@@ -296,14 +296,14 @@ public final class ServerSupervisor {
 			// A record whose app is still running belongs to that copy, and stopping its
 			// server would take the stack out from under it.
 			recorded.owner == owner || !runner.isRunning(recorded.owner),
-			let existing = runner.adopt(group: recorded.group, members: recorded.members)
+			let existing = runner.adopt(group: recorded.group, members: recorded.membership)
 		else { return false }
 
 		let mine = ServerRecord(
 			group: recorded.group,
 			port: recorded.port,
 			owner: owner,
-			members: existing.members.union(recorded.members.filter(\.isRunning))
+			members: existing.membership
 		)
 
 		do {
@@ -418,7 +418,7 @@ public final class ServerSupervisor {
 						group: started.pid,
 						port: plan.port,
 						owner: owner,
-						members: started.members
+						members: started.membership
 					)
 				)
 			} catch {
@@ -434,7 +434,7 @@ public final class ServerSupervisor {
 				group: started.pid,
 				port: plan.port,
 				owner: owner,
-				members: started.members
+				members: started.membership
 			)
 			server = started
 			state = .running(owned: true)
@@ -451,9 +451,9 @@ public final class ServerSupervisor {
 	private func rememberMembers(of started: any ServerProcess) {
 		guard let current = record, server === started else { return }
 
-		let members = started.members
+		let members = started.membership
 
-		guard !members.isEmpty, members != current.members else { return }
+		guard !members.isEmpty else { return }
 
 		let updated = ServerRecord(
 			group: current.group,
@@ -461,6 +461,8 @@ public final class ServerSupervisor {
 			owner: current.owner,
 			members: members
 		)
+
+		guard updated != current else { return }
 
 		do {
 			try records.save(updated)

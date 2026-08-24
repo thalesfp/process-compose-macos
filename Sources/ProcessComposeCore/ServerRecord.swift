@@ -34,15 +34,23 @@ public struct ServerRecord: Codable, Sendable, Hashable {
 	public let group: Int32
 	public let port: Int
 	public let owner: ServerOwner
-	/// The processes the group was seen holding. A group number is handed out again once its
-	/// group is gone, so the number alone is no proof this is the same stack.
-	public let members: Set<ServerOwner>
+	/// The processes each group was seen holding, keyed by group number. A number is handed
+	/// out again once its group is gone, so it is no proof on its own; and a process that is
+	/// still alive proves nothing about a group it has since left.
+	public let members: [String: Set<ServerOwner>]
 
-	public init(group: Int32, port: Int, owner: ServerOwner, members: Set<ServerOwner> = []) {
+	public init(group: Int32, port: Int, owner: ServerOwner, members: [Int32: Set<ServerOwner>] = [:]) {
 		self.group = group
 		self.port = port
 		self.owner = owner
-		self.members = members
+		self.members = Dictionary(uniqueKeysWithValues: members.map { (String($0.key), $0.value) })
+	}
+
+	/// The recorded membership, keyed the way the process table reports it.
+	public var membership: [Int32: Set<ServerOwner>] {
+		Dictionary(uniqueKeysWithValues: members.compactMap { key, value in
+			Int32(key).map { ($0, value) }
+		})
 	}
 }
 

@@ -44,15 +44,23 @@ final class GroupedProcess: @unchecked Sendable {
 	/// while the group lives, so a record that outlived its group can name an unrelated one:
 	/// a member has to be recognised before anything is signalled. Nothing is reaped here,
 	/// since this process never forked it.
-	static func adopt(group: pid_t, members: Set<ServerOwner>) -> GroupedProcess? {
-		guard group > 0, kill(-group, 0) == 0 else { return nil }
+	static func adopt(group: pid_t, members: [pid_t: Set<ServerOwner>]) -> GroupedProcess? {
+		guard group > 0 else { return nil }
 
-		// One of the processes this stack was recorded as holding has to still be there, and
-		// be the same process it was. A matching name in a matching group number is not that.
-		guard members.contains(where: \.isRunning) else { return nil }
+		// Still there, still the same process, and still in the group it was recorded in. A
+		// service that outlived its group says nothing about who holds that number now.
+		var confirmed: [pid_t: Set<ServerOwner>] = [:]
+
+		for (recorded, identities) in members {
+			let present = identities.filter { $0.isRunning && UnixProcess.group(of: $0.pid) == recorded }
+
+			if !present.isEmpty { confirmed[recorded] = present }
+		}
+
+		guard confirmed[group] != nil else { return nil }
 
 		let taken = GroupedProcess(pid: group, output: -1, isOurs: false)
-		taken.known[group] = members.filter(\.isRunning)
+		taken.known = confirmed
 
 		return taken
 	}
@@ -284,13 +292,15 @@ final class GroupedProcess: @unchecked Sendable {
 		if live.isEmpty { finished = true }
 	}
 
-	/// Everything this group is holding now, as identities that can be recorded and checked
+	/// What each group is holding now, as identities that can be recorded and recognised
 	/// again later.
-	var members: Set<ServerOwner> {
+	var membership: [pid_t: Set<ServerOwner>] {
 		lock.lock()
 		defer { lock.unlock() }
 
-		return liveMembers()
+		_ = liveMembers()
+
+		return known.mapValues { $0.filter(\.isRunning) }.filter { !$0.value.isEmpty }
 	}
 
 	/// Everything seen under the launch group that is still the process it was. The kernel
