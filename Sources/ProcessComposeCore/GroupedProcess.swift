@@ -15,6 +15,7 @@ final class GroupedProcess: @unchecked Sendable {
 	/// is reused once its group is gone, so a member has to still be the one that was noted.
 	private var known: [pid_t: Set<ServerOwner>] = [:]
 	private var notedAt: UInt64 = 0
+	private var vacated = false
 
 	private let isOurs: Bool
 
@@ -194,12 +195,25 @@ final class GroupedProcess: @unchecked Sendable {
 		guard due else { return }
 
 		lock.lock()
+		// Seeded only from what is confirmed: a group whose number has been handed on holds
+		// somebody else's processes, and recording them would be enough to signal them later.
+		var seedGroups = Set(liveGroups())
 		let seeds = Set(known.values.flatMap { $0 }.filter(\.isRunning).map(\.pid))
-		let seedGroups = Set(known.keys).union([pid])
+
+		// The launch group is this process's own, from before anything in it was enumerated,
+		// so it is seeded until the first time it is seen empty. After that its number is
+		// free and whatever holds it next is somebody else's.
+		if isOurs, !vacated {
+			if kill(-pid, 0) == 0 {
+				seedGroups.insert(pid)
+			} else {
+				vacated = true
+			}
+		}
 		lock.unlock()
 
-		// Seeded from everything known to be alive, not only the launch group: a stack that
-		// moved out of it goes on starting services from wherever it is now.
+		guard !seedGroups.isEmpty || !seeds.isEmpty else { return }
+
 		let found = UnixProcess.groups(from: seeds, groups: seedGroups)
 
 		lock.lock()
@@ -347,17 +361,18 @@ final class GroupedProcess: @unchecked Sendable {
 		var live: [pid_t] = []
 
 		for (group, members) in known {
-			// Still running, and still in this group. A process that has moved on says
-			// nothing about who holds the number it left, and the number is handed out again
-			// once the group is empty.
-			let present = members.filter { $0.isRunning && UnixProcess.group(of: $0.pid) == group }
-
-			if present.isEmpty {
+			// A number is handed out again only once its group is empty, and these groups
+			// have been watched since they were made, so one that has never been seen empty
+			// is still the one it was. Recorded identities that have gone or moved on are
+			// dropped, but they are not what says the group is ours: a group can hold
+			// processes that have not been enumerated yet.
+			guard kill(-group, 0) == 0 else {
 				known[group] = nil
-			} else {
-				known[group] = present
-				live.append(group)
+				continue
 			}
+
+			known[group] = members.filter { $0.isRunning && UnixProcess.group(of: $0.pid) == group }
+			live.append(group)
 		}
 
 		return live

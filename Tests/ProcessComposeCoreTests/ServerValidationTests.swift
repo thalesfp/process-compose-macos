@@ -760,6 +760,30 @@ struct ManagedGroupTests {
 		#expect(kill(moved, 0) != 0)
 	}
 
+	@Test("records nothing more once everything it was holding has gone")
+	func recordsNothingAfterTheStackIsGone() async throws {
+		let directory = try scratchDirectory("gone")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let plan = try wrapper(in: directory, "sleep 0.2")
+
+		let server = try LiveServerRunner().run(plan)
+
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while server.isRunning, ContinuousClock.now < deadline {
+			try await Task.sleep(for: .milliseconds(20))
+		}
+
+		#expect(server.membership.isEmpty)
+
+		// The number the group had is free now, and whatever is given it next is not ours.
+		try await Task.sleep(for: .milliseconds(300))
+
+		#expect(server.membership.isEmpty)
+		#expect(server.isRunning == false)
+	}
+
 	@Test("stops a service the server put in a group of its own")
 	func stopsAServiceInItsOwnGroup() async throws {
 		let directory = try scratchDirectory("managed")
