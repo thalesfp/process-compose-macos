@@ -179,6 +179,21 @@ final class SpawnedServerProcess: ServerProcess {
 		exits = codes
 
 		let started = check
+
+		// Draining blocks, so the services the leader starts are looked for beside it:
+		// closely at first, since a wrapper can be gone in milliseconds, then rarely.
+		Task.detached {
+			let closely = ContinuousClock.now.advanced(by: .seconds(5))
+
+			repeat {
+				started.track()
+
+				let interval: Duration = ContinuousClock.now < closely ? .milliseconds(50) : .seconds(2)
+
+				try? await Task.sleep(for: interval)
+			} while started.hasMembers
+		}
+
 		Task.detached {
 			let buffer = LineBuffer()
 			started.drain { data in

@@ -164,6 +164,12 @@ final class GroupedProcess: @unchecked Sendable {
 		close(output)
 	}
 
+	/// Looks now for what the group has started. The leader can start its services and exit
+	/// within a few milliseconds, and once it is gone nothing points at them.
+	func track() {
+		noteManagedGroups(force: true)
+	}
+
 	// Walking the process table is not free, so it is walked at most twice a second while
 	// the leader lives.
 	private func noteManagedGroups(force: Bool = false) {
