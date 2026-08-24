@@ -334,6 +334,22 @@ struct ServerRecordStoreTests {
 		#expect(try String(contentsOf: file, encoding: .utf8) == "not json at all")
 	}
 
+	@Test("refuses to write over records it is not allowed to read")
+	func refusesToWriteOverUnopenableRecords() throws {
+		let directory = try scratchDirectory("forbidden")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let file = directory.appendingPathComponent("server.json")
+		let store = FileServerRecordStore(url: file)
+		try #"{"28080":{}}"#.write(to: file, atomically: true, encoding: .utf8)
+		try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: file.path)
+		defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file.path) }
+
+		#expect(throws: FileServerRecordStore.Fault.self) {
+			try store.save(ServerRecord(group: 100, port: 28099, owner: ServerOwner(pid: 900, startedAt: 1)))
+		}
+	}
+
 	@Test("keeps a record another copy of the app wrote in its place")
 	func clearsOnlyItsOwnRecord() throws {
 		let directory = try scratchDirectory("records")

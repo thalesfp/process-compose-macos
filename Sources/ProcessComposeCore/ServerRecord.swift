@@ -125,7 +125,16 @@ public struct FileServerRecordStore: ServerRecordStore {
 	/// Throws rather than starting again from nothing: the file holds the records of every
 	/// port, and writing over one that cannot be read would lose the stacks named in it.
 	private func all() throws -> [String: ServerRecord] {
-		guard let data = try? Data(contentsOf: url) else { return [:] }
+		let data: Data
+
+		do {
+			data = try Data(contentsOf: url)
+		} catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+			// Nothing recorded yet, which is the one case where starting from nothing is right.
+			return [:]
+		} catch {
+			throw Fault.unreadable
+		}
 
 		do {
 			return try JSONDecoder().decode([String: ServerRecord].self, from: data)
