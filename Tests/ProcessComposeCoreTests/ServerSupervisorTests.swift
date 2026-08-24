@@ -525,6 +525,26 @@ struct ServerSupervisorTests {
 		#expect(records.record?.owner == .test(901))
 	}
 
+	@Test("keeps the record of a stack that would not stop")
+	func keepsTheRecordOfAStackItCouldNotStop() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		runner.ignoresKill = true
+		let records = MemoryRecordStore()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			grace: .milliseconds(100)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.stop()
+
+		#expect(records.record != nil)
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -600,6 +620,7 @@ private final class FakeRunner: ServerRunner {
 	var liveOwners: Set<ServerOwner> = []
 	private(set) var adoptedWith: Set<String> = []
 	var ignoresTerminate = false
+	var ignoresKill = false
 	private(set) var started: FakeServerProcess?
 
 	func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess {
@@ -607,7 +628,11 @@ private final class FakeRunner: ServerRunner {
 
 		launched.append(plan)
 
-		let process = FakeServerProcess(pid: 4242, ignoresTerminate: ignoresTerminate)
+		let process = FakeServerProcess(
+			pid: 4242,
+			ignoresTerminate: ignoresTerminate,
+			ignoresKill: ignoresKill
+		)
 		started = process
 
 		return process
@@ -639,14 +664,16 @@ private final class FakeServerProcess: ServerProcess {
 
 	private let feed: AsyncStream<String>.Continuation
 	private let ignoresTerminate: Bool
+	private let ignoresKill: Bool
 
-	init(pid: Int32, ignoresTerminate: Bool = false) {
+	init(pid: Int32, ignoresTerminate: Bool = false, ignoresKill: Bool = false) {
 		let (lines, feed) = AsyncStream<String>.makeStream()
 
 		self.pid = pid
 		self.output = lines
 		self.feed = feed
 		self.ignoresTerminate = ignoresTerminate
+		self.ignoresKill = ignoresKill
 	}
 
 	func emit(_ line: String) {
@@ -668,6 +695,9 @@ private final class FakeServerProcess: ServerProcess {
 
 	func kill() {
 		didKill = true
+
+		guard !ignoresKill else { return }
+
 		stop()
 	}
 

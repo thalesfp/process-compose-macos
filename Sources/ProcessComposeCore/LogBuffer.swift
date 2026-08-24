@@ -26,7 +26,7 @@ public struct LogBuffer: Sendable {
 	}
 
 	public mutating func append(_ text: String) {
-		let kept = text.count > Self.longestLine ? String(text.prefix(Self.longestLine)) + "…" : text
+		let kept = String(decoding: LogBuffer.head(of: Array(text.utf8)), as: UTF8.self)
 
 		lines.append(LogLine(id: nextID, spans: AnsiParser.spans(in: kept)))
 		nextID += 1
@@ -35,6 +35,21 @@ public struct LogBuffer: Sendable {
 
 	public mutating func removeAll() {
 		lines = []
+	}
+
+	/// The first bytes of a line, cut on a code point boundary so the decoder does not turn
+	/// a half character into a replacement that is longer than what it replaced.
+	static func head<Bytes: Collection>(of bytes: Bytes) -> Bytes.SubSequence
+	where Bytes.Element == UInt8, Bytes.Index == Int {
+		guard bytes.count > longestLine else { return bytes[bytes.startIndex...] }
+
+		var end = bytes.startIndex + longestLine
+
+		while end > bytes.startIndex, bytes[end] & 0b1100_0000 == 0b1000_0000 {
+			end -= 1
+		}
+
+		return bytes[bytes.startIndex ..< end]
 	}
 
 	private mutating func trim() {

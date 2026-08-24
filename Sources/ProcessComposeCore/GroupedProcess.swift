@@ -12,6 +12,7 @@ final class GroupedProcess: @unchecked Sendable {
 	private var reaped = false
 	private var finished = false
 	private var managed: Set<pid_t> = []
+	private var notedAt: UInt64 = 0
 
 	private let isOurs: Bool
 
@@ -121,7 +122,12 @@ final class GroupedProcess: @unchecked Sendable {
 	/// Whether anything in the group is still there. A wrapper that starts the server and
 	/// exits leaves the work behind it, so the leader going is not the group going.
 	var hasMembers: Bool {
-		if kill(-pid, 0) == 0 { return true }
+		if kill(-pid, 0) == 0 {
+			// Noted while the leader is alive, since once it goes nothing points at the
+			// groups it started, and it can go without ever being signalled.
+			noteManagedGroups()
+			return true
+		}
 
 		lock.lock()
 		let known = managed
@@ -155,6 +161,25 @@ final class GroupedProcess: @unchecked Sendable {
 		}
 
 		close(output)
+	}
+
+	// Walking the process table is not free, so it is walked at most twice a second while
+	// the leader lives.
+	private func noteManagedGroups(force: Bool = false) {
+		let now = DispatchTime.now().uptimeNanoseconds
+
+		lock.lock()
+		let due = force || now &- notedAt > 500_000_000
+		if due { notedAt = now }
+		lock.unlock()
+
+		guard due else { return }
+
+		let found = UnixProcess.descendantGroups(of: pid)
+
+		lock.lock()
+		managed.formUnion(found)
+		lock.unlock()
 	}
 
 	/// Waits for the child to exit without reaping it, so the pid stays claimed and the
@@ -209,12 +234,12 @@ final class GroupedProcess: @unchecked Sendable {
 	/// not in this one. They are noted on the way past and signalled too, since by the time
 	/// the leader is gone nothing points at them any more.
 	func signal(_ number: Int32) {
+		noteManagedGroups(force: true)
+
 		lock.lock()
 		defer { lock.unlock() }
 
 		guard !finished else { return }
-
-		managed.formUnion(UnixProcess.descendantGroups(of: pid))
 
 		let ours = kill(-pid, 0) == 0
 

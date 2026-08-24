@@ -103,6 +103,19 @@ struct LogBufferBoundsTests {
 
 		buffer.append(String(repeating: "x", count: 200_000))
 
-		#expect(buffer.lines.first!.text.count <= LogBuffer.longestLine + 1)
+		#expect(buffer.lines.first!.text.utf8.count <= LogBuffer.longestLine)
+	}
+
+	@Test("measures a line in bytes, so combining marks cannot slip past the limit")
+	func capsByBytesNotCharacters() {
+		var buffer = LogBuffer(maxLines: 10)
+
+		// One character carrying many combining marks: a few characters, a great many bytes.
+		let heavy = String(repeating: "e" + String(repeating: "\u{0301}", count: 20_000), count: 4)
+
+		buffer.append(heavy)
+
+		#expect(heavy.count < LogBuffer.longestLine)
+		#expect(buffer.lines.first!.text.utf8.count <= LogBuffer.longestLine)
 	}
 }

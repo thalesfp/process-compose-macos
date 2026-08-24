@@ -189,7 +189,17 @@ public final class ServerSupervisor {
 		server.terminate()
 		await waitForExit(of: server)
 
-		if server.isRunning { server.kill() }
+		if server.isRunning {
+			server.kill()
+			await waitForExit(of: server, within: .seconds(2))
+		}
+
+		// A stack that survived SIGKILL is still out there, and dropping the record would
+		// leave nothing able to find it again.
+		guard !server.isRunning else {
+			state = .failed(reason: "The stack is still running and could not be stopped")
+			return
+		}
 
 		release()
 	}
@@ -215,7 +225,16 @@ public final class ServerSupervisor {
 			usleep(50_000)
 		}
 
-		if server.isRunning { server.kill() }
+		if server.isRunning {
+			server.kill()
+
+			let hard = ContinuousClock.now.advanced(by: .seconds(2))
+			while server.isRunning, ContinuousClock.now < hard { usleep(50_000) }
+		}
+
+		// A stack that survived SIGKILL is still out there, and dropping the record would
+		// leave the next run nothing to find it with.
+		guard !server.isRunning else { return }
 
 		release()
 	}
@@ -368,8 +387,8 @@ public final class ServerSupervisor {
 		}
 	}
 
-	private func waitForExit(of server: any ServerProcess) async {
-		let deadline = ContinuousClock.now.advanced(by: grace)
+	private func waitForExit(of server: any ServerProcess, within limit: Duration? = nil) async {
+		let deadline = ContinuousClock.now.advanced(by: limit ?? grace)
 
 		while server.isRunning, ContinuousClock.now < deadline {
 			try? await Task.sleep(for: .milliseconds(50))

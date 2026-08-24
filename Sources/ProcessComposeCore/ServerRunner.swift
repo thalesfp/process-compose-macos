@@ -176,9 +176,7 @@ final class SpawnedServerProcess: ServerProcess {
 		Task.detached {
 			let buffer = LineBuffer()
 			started.drain { data in
-				for line in buffer.take(data) {
-					lineFeed.yield(String(line.prefix(LogBuffer.longestLine)))
-				}
+				for line in buffer.take(data) { lineFeed.yield(line) }
 			}
 			lineFeed.finish()
 
@@ -439,7 +437,11 @@ private final class LineBuffer: @unchecked Sendable {
 		var lines: [String] = []
 		var start = pending.startIndex
 		while let newline = pending[start...].firstIndex(of: 0x0A) {
-			lines.append(String(decoding: pending[start ..< newline], as: UTF8.self))
+			// Cut by bytes rather than characters: one character can carry any number of
+			// combining marks, so a character count is no bound on memory at all.
+			let line = Array(pending[start ..< newline])
+
+			lines.append(String(decoding: LogBuffer.head(of: line), as: UTF8.self))
 			start = pending.index(after: newline)
 		}
 		pending.removeSubrange(pending.startIndex ..< start)
