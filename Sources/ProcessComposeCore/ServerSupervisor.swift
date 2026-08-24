@@ -272,7 +272,12 @@ public final class ServerSupervisor {
 		// Validation takes as long as the config does, and another copy of the app can claim
 		// the port while it runs, so the answer from before it is no longer good enough. The
 		// claim is held from that last look until the record is written.
-		let claim = records.claimLaunch()
+		// Without the claim there is no exclusion between copies of the app, and without the
+		// record a crash leaves the stack unrecoverable. Neither is worth starting without.
+		guard let claim = records.claimLaunch() else {
+			state = .failed(reason: "Could not claim the right to start a server")
+			return
+		}
 
 		if let address, await reachability.isReachable(address) {
 			guard isCurrent(mine) else { return }
@@ -303,8 +308,19 @@ public final class ServerSupervisor {
 		do {
 			let started = try runner.run(plan)
 
+			do {
+				try records.save(ServerRecord(group: started.pid, port: plan.port, owner: owner))
+			} catch {
+				started.terminate()
+				await waitForExit(of: started)
+				if started.isRunning { started.kill() }
+
+				state = .failed(reason: "Could not record the server: \(error.localizedDescription)")
+				return
+			}
+
+			record = ServerRecord(group: started.pid, port: plan.port, owner: owner)
 			server = started
-			remember(ServerRecord(group: started.pid, port: plan.port, owner: owner))
 			state = .running(owned: true)
 			watch(started)
 			_ = claim
@@ -346,17 +362,6 @@ public final class ServerSupervisor {
 		server = nil
 		forget()
 		state = .idle
-	}
-
-	// Losing the record costs the next run its chance to take this server back.
-	private func remember(_ record: ServerRecord) {
-		self.record = record
-
-		do {
-			try records.save(record)
-		} catch {
-			log.append("Could not record the server pid: \(error.localizedDescription)")
-		}
 	}
 
 	private func forget() {

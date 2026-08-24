@@ -69,8 +69,9 @@ public struct LiveServerRunner: ServerRunner {
 		// The binary can be a script of the user's own, which can hang, wait on input that
 		// never comes, or leave a child holding the pipe, so reading is raced against the
 		// clock rather than trusted to finish.
+		// The check stays listed until it is over, cleanup included: a quit during the wait
+		// between SIGTERM and SIGKILL would otherwise find nothing to end.
 		checks.add(check)
-		defer { checks.remove(check) }
 
 		let reader = Task.detached {
 			let printed = check.read()
@@ -86,10 +87,12 @@ public struct LiveServerRunner: ServerRunner {
 		}
 
 		guard let printed else {
-			Task { await Self.end(check) }
+			Task { [checks] in await Self.end(check, listedIn: checks) }
 
 			return .failed(reason: "The config check did not finish")
 		}
+
+		checks.remove(check)
 
 		guard check.reap() != 0 else { return .valid }
 
@@ -118,7 +121,9 @@ public struct LiveServerRunner: ServerRunner {
 
 	/// A script that ignores SIGTERM, and whatever it started, still has to go. The status
 	/// is collected only once the last signal is out.
-	private static func end(_ check: GroupedProcess) async {
+	private static func end(_ check: GroupedProcess, listedIn checks: RunningChecks) async {
+		defer { checks.remove(check) }
+
 		check.signal(SIGTERM)
 
 		try? await Task.sleep(for: .seconds(1))

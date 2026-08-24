@@ -435,6 +435,41 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state == .running(owned: true))
 	}
 
+	@Test("starts nothing it could not record")
+	func refusesToStartWhatItCannotRecord() async {
+		let runner = FakeRunner()
+		let records = MemoryRecordStore()
+		records.savingFails = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.started?.didTerminate == true)
+		#expect(supervisor.isOwned == false)
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+	}
+
+	@Test("starts nothing while another copy holds the right to start")
+	func refusesToStartWithoutTheClaim() async {
+		let runner = FakeRunner()
+		let records = MemoryRecordStore()
+		records.refusesClaim = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.launched.isEmpty)
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -587,6 +622,8 @@ private final class FakeServerProcess: ServerProcess {
 	}
 }
 
+enum StoreFailure: Error { case full }
+
 private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 	private(set) var record: ServerRecord?
 
@@ -596,9 +633,23 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 
 	func load() -> ServerRecord? { record }
 
-	func save(_ record: ServerRecord) throws { self.record = record }
+	func save(_ record: ServerRecord) throws {
+		if savingFails { throw StoreFailure.full }
 
-	func claimLaunch() -> ServerLaunchClaim? { nil }
+		self.record = record
+	}
+
+	nonisolated(unsafe) var refusesClaim = false
+	nonisolated(unsafe) var savingFails = false
+
+	func claimLaunch() -> ServerLaunchClaim? {
+		guard !refusesClaim else { return nil }
+
+		return ServerLaunchClaim(
+			path: FileManager.default.temporaryDirectory
+				.appendingPathComponent("claim-\(UUID().uuidString)").path
+		)
+	}
 
 	func clear(_ record: ServerRecord) throws {
 		guard self.record == record else { return }
