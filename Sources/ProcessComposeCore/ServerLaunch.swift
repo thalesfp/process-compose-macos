@@ -117,13 +117,27 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 			guard let text = contents(file) else { continue }
 
 			for line in text.split(whereSeparator: \.isNewline) {
-				let name = String(line.prefix { $0 != "=" }).trimmingCharacters(in: .whitespaces)
-
-				if Self.refusedVariables.contains(name) { found.insert(name) }
+				if let name = Self.assignedName(in: String(line)), Self.refusedVariables.contains(name) {
+					found.insert(name)
+				}
 			}
 		}
 
 		return found.sorted()
+	}
+
+	// The loader behind .pc_env takes `NAME=value`, `export NAME=value` and `NAME: value`,
+	// all of which were confirmed against process-compose v1.122.0.
+	static func assignedName(in line: String) -> String? {
+		var rest = Substring(line).trimmingPrefix(while: \.isWhitespace)
+
+		if rest.hasPrefix("#") { return nil }
+
+		if rest.hasPrefix("export ") { rest = rest.dropFirst("export ".count) }
+
+		let name = rest.prefix { $0 != "=" && $0 != ":" }.trimmingCharacters(in: .whitespaces)
+
+		return name.count == rest.count ? nil : name
 	}
 
 	/// The config of the server the app is attached to, so a stack started from a terminal
