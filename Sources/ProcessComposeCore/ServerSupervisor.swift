@@ -422,7 +422,7 @@ public final class ServerSupervisor {
 
 			// The recorded stack is still there but could not be taken over. Starting a
 			// second one would replace the only record that can still find the first.
-			if runner.isGroupRunning(recorded.group) {
+			if runner.isStackRunning(recorded.membership) {
 				state = .failed(
 					reason: "A server is already running on port \(plan.port) that this app cannot take over"
 				)

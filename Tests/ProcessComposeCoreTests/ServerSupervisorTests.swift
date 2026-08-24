@@ -731,6 +731,32 @@ struct ServerSupervisorTests {
 		#expect(ServerOwner.current.isRunning)
 	}
 
+	@Test("starts a server when the recorded group number now belongs to someone else")
+	func launchesWhenTheRecordedStackIsGone() async {
+		let runner = FakeRunner()
+		// The number is in use, but by nothing this stack was recorded as holding, so the
+		// recorded stack is gone and the port is free.
+		let records = MemoryRecordStore(
+			record: ServerRecord(
+				group: 4242,
+				port: 28080,
+				owner: .test(900),
+				members: [4242: [ServerOwner(pid: 4242, startedAt: 11)]]
+			)
+		)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			owner: .test(901)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(runner.launched == [.test])
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -851,8 +877,8 @@ private final class FakeRunner: ServerRunner {
 		liveOwners.contains(owner)
 	}
 
-	func isGroupRunning(_ group: Int32) -> Bool {
-		liveGroups.contains(group)
+	func isStackRunning(_ members: [Int32: Set<ServerOwner>]) -> Bool {
+		members.keys.contains { liveGroups.contains($0) }
 	}
 }
 

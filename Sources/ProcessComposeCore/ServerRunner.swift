@@ -30,8 +30,9 @@ public protocol ServerRunner {
 	/// holding is still there.
 	func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)?
 	func isRunning(_ owner: ServerOwner) -> Bool
-	/// Whether anything of a recorded group is left, without taking it over.
-	func isGroupRunning(_ group: Int32) -> Bool
+	/// Whether a recorded stack is still there, without taking it over. A group number that
+	/// belongs to someone else now is not that stack.
+	func isStackRunning(_ members: [Int32: Set<ServerOwner>]) -> Bool
 }
 
 public struct LiveServerRunner: ServerRunner {
@@ -140,8 +141,10 @@ public struct LiveServerRunner: ServerRunner {
 		owner.isRunning
 	}
 
-	public func isGroupRunning(_ group: Int32) -> Bool {
-		group > 0 && Darwin.kill(-group, 0) == 0
+	public func isStackRunning(_ members: [Int32: Set<ServerOwner>]) -> Bool {
+		members.contains { group, identities in
+			identities.contains { $0.isRunning && UnixProcess.group(of: $0.pid) == group }
+		}
 	}
 
 	public func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)? {

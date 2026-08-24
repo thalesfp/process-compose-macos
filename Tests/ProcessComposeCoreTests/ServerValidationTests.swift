@@ -444,7 +444,7 @@ private struct RecordedRunner: ServerRunner {
 
 	func isRunning(_ owner: ServerOwner) -> Bool { false }
 
-	func isGroupRunning(_ group: Int32) -> Bool { true }
+	func isStackRunning(_ members: [Int32: Set<ServerOwner>]) -> Bool { true }
 
 	func adopt(group: Int32, members: [Int32: Set<ServerOwner>]) -> (any ServerProcess)? {
 		RecoveredServer(pid: group)
