@@ -805,6 +805,22 @@ struct ManagedGroupTests {
 		#expect(server.isRunning == false)
 	}
 
+	@Test("keeps the last thing a server said when it ends without a newline")
+	func keepsAnUnfinishedLastLine() async throws {
+		let directory = try scratchDirectory("unfinished")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let plan = try wrapper(in: directory, "printf 'port already in use'")
+
+		let server = try LiveServerRunner().run(plan)
+		let lines = server.output
+
+		var said: [String] = []
+		for await line in lines { said.append(line) }
+
+		#expect(said == ["port already in use"])
+	}
+
 	@Test("stops a service the server put in a group of its own")
 	func stopsAServiceInItsOwnGroup() async throws {
 		let directory = try scratchDirectory("managed")

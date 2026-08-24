@@ -218,6 +218,10 @@ final class SpawnedServerProcess: ServerProcess {
 			started.drain { data in
 				for line in buffer.take(data) { lineFeed.yield(line) }
 			}
+
+			// A server that says why it is going and exits may not end that with a newline.
+			if let last = buffer.rest() { lineFeed.yield(last) }
+
 			lineFeed.finish()
 
 			started.waitUntilExit()
@@ -497,6 +501,19 @@ private final class LineBuffer: @unchecked Sendable {
 
 	private var pending = Data()
 	private let lock = NSLock()
+
+	/// What is left when there is no more to read: a line the writer never finished.
+	func rest() -> String? {
+		lock.lock()
+		defer { lock.unlock() }
+
+		guard !pending.isEmpty else { return nil }
+
+		let line = String(decoding: LogBuffer.head(of: Array(pending)), as: UTF8.self)
+		pending = Data()
+
+		return line.isEmpty ? nil : line
+	}
 
 	func take(_ data: Data) -> [String] {
 		lock.lock()
