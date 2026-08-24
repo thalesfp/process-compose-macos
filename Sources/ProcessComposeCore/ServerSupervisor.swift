@@ -74,6 +74,7 @@ public final class ServerSupervisor {
 	private var launchTask: Task<Void, Never>?
 	private var useTask: Task<Void, Never>?
 	private var useInputs: Inputs?
+	private var useToken = 0
 	private var record: ServerRecord?
 	private var plan: ServerLaunchPlan?
 	private var address: ServerAddress?
@@ -133,6 +134,8 @@ public final class ServerSupervisor {
 
 		generation += 1
 		let mine = generation
+		useToken += 1
+		let token = useToken
 		useInputs = wanted
 
 		let work = Task { await self.apply(wanted, generation: mine) }
@@ -140,7 +143,9 @@ public final class ServerSupervisor {
 
 		await work.value
 
-		if useInputs == wanted { useTask = nil }
+		// Only the request that still holds the slot may give it up: an earlier one asking
+		// for exactly the same thing would otherwise clear a later one that is still going.
+		if useToken == token { useTask = nil }
 	}
 
 	private func apply(_ wanted: Inputs, generation mine: Int) async {

@@ -784,6 +784,33 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state == .running(owned: true))
 	}
 
+	@Test("does not let a finished request clear the slot of a later one")
+	func anEarlierRequestLeavesTheCurrentSlotAlone() async {
+		let runner = FakeRunner()
+		let probe = SlowReachability()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: probe,
+			records: MemoryRecordStore()
+		)
+
+		let first = Task { await supervisor.use(address: .standard, plan: .test) }
+		await until { probe.didStart }
+
+		let other = ServerAddress(host: "localhost", port: 28081)!
+		let second = Task { await supervisor.use(address: other, plan: .test) }
+		let third = Task { await supervisor.use(address: .standard, plan: .test) }
+
+		probe.answerNow()
+		await first.value
+		await second.value
+		await third.value
+
+		// The third request is the one that counts, and it started exactly one server.
+		#expect(runner.launched == [.test])
+		#expect(supervisor.state == .running(owned: true))
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
