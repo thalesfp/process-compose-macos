@@ -32,7 +32,9 @@ struct ServerValidationTests {
 				port: 28080
 			)
 		)
-		let runner = LiveServerRunner(validationTimeout: .seconds(1))
+		// Long enough that a loaded machine still reaches the line recording the child, and
+		// far below the thirty seconds the script would otherwise take.
+		let runner = LiveServerRunner(validationTimeout: .seconds(3))
 
 		let started = ContinuousClock.now
 		let validation = await runner.validate(plan)

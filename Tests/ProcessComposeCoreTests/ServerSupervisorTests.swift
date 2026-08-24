@@ -355,6 +355,45 @@ struct ServerSupervisorTests {
 		#expect(records.record == winner)
 	}
 
+	@Test("takes back a recorded server that is up but not answering yet")
+	func recoversARecordedServerThatIsNotAnsweringYet() async {
+		let runner = FakeRunner()
+		let recovered = FakeServerProcess(pid: 4242)
+		runner.adoptable[4242] = recovered
+		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: 901))
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			owner: 901
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(runner.launched.isEmpty)
+	}
+
+	@Test("does not start a second server beside one another copy is running")
+	func leavesAnUnreachableServerOfAnotherCopyAlone() async {
+		let runner = FakeRunner()
+		runner.livePIDs = [900]
+		let record = ServerRecord(group: 4242, port: 28080, owner: 900)
+		let records = MemoryRecordStore(record: record)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			owner: 901
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: false))
+		#expect(runner.launched.isEmpty)
+		#expect(records.record == record)
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()

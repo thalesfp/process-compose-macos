@@ -283,6 +283,23 @@ public final class ServerSupervisor {
 
 		guard isCurrent(mine) else { return }
 
+		// A server that is up but not answering yet still owns the port, and starting a
+		// second one would only replace the record that makes the first recoverable.
+		if let recorded = records.load(), recorded.port == plan.port {
+			if recorded.owner != owner, runner.isRunning(pid: recorded.owner) {
+				state = .running(owned: false)
+				return
+			}
+
+			if let recovered = runner.adopt(group: recorded.group, names: launchNames) {
+				server = recovered
+				record = recorded
+				state = .running(owned: true)
+				watch(recovered)
+				return
+			}
+		}
+
 		do {
 			let started = try runner.run(plan)
 

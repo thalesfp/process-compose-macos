@@ -92,8 +92,11 @@ final class GroupedProcess: @unchecked Sendable {
 		return GroupedProcess(pid: pid, output: reading, isOurs: true)
 	}
 
-	/// Everything the child printed. Ends when the last writer closes the pipe, which
-	/// killing the group guarantees.
+	/// The end of what the child printed. Reading never stops early, since a full pipe would
+	/// block the child, but only the tail is kept: the fault a check reports is its last
+	/// line, and a noisy binary would otherwise be held in memory in full.
+	static let keptOutput = 1 << 20
+
 	func read() -> String {
 		var data = Data()
 		var buffer = [UInt8](repeating: 0, count: 65536)
@@ -101,7 +104,12 @@ final class GroupedProcess: @unchecked Sendable {
 		while true {
 			let count = Darwin.read(output, &buffer, buffer.count)
 			guard count > 0 else { break }
+
 			data.append(contentsOf: buffer[0 ..< count])
+
+			if data.count > Self.keptOutput {
+				data.removeFirst(data.count - Self.keptOutput)
+			}
 		}
 
 		close(output)
