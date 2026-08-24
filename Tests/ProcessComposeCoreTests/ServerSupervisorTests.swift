@@ -26,13 +26,13 @@ struct ServerSupervisorTests {
 		let orphan = FakeServerProcess(pid: 4242)
 		runner.adoptable[4242] = orphan
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: 900)
+			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900))
 		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(true),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
@@ -51,15 +51,15 @@ struct ServerSupervisorTests {
 		let runner = FakeRunner()
 		let orphan = FakeServerProcess(pid: 4242)
 		runner.adoptable[4242] = orphan
-		runner.livePIDs = [900]
+		runner.liveOwners = [.test(900)]
 		let records = MemoryRecordStore(
-			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: 900)
+			record: ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900))
 		)
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(true),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
@@ -80,14 +80,14 @@ struct ServerSupervisorTests {
 			runner: runner,
 			reachability: FakeReachability(false),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
 
 		#expect(supervisor.state == .running(owned: true))
 		#expect(runner.launched == [.test])
-		#expect(records.record == ServerRecord(group: 4242, port: 28080, owner: 901))
+		#expect(records.record == ServerRecord(group: 4242, port: 28080, owner: .test(901)))
 	}
 
 	@Test("stays put when no launch is configured")
@@ -230,14 +230,14 @@ struct ServerSupervisorTests {
 	@Test("quitting a copy that started nothing leaves the record alone")
 	func quitKeepsAnotherCopysRecord() async {
 		let runner = FakeRunner()
-		runner.livePIDs = [900]
-		let record = ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: 900)
+		runner.liveOwners = [.test(900)]
+		let record = ServerRecord(group: 4242, port: ServerAddress.defaultPort, owner: .test(900))
 		let records = MemoryRecordStore(record: record)
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(true),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
@@ -267,12 +267,12 @@ struct ServerSupervisorTests {
 	func doesNotAdoptARemoteServer() async {
 		let runner = FakeRunner()
 		runner.adoptable[4242] = FakeServerProcess(pid: 4242)
-		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: 901))
+		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: .test(901)))
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(true),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 		let remote = ServerAddress(host: "build-box.local", port: 28080)!
 
@@ -342,12 +342,12 @@ struct ServerSupervisorTests {
 			runner: runner,
 			reachability: FakeReachability(false),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
 
-		let winner = ServerRecord(group: 7777, port: 28080, owner: 902)
+		let winner = ServerRecord(group: 7777, port: 28080, owner: .test(902))
 		try? records.save(winner)
 
 		await supervisor.stop()
@@ -360,12 +360,12 @@ struct ServerSupervisorTests {
 		let runner = FakeRunner()
 		let recovered = FakeServerProcess(pid: 4242)
 		runner.adoptable[4242] = recovered
-		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: 901))
+		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: .test(901)))
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(false),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
@@ -377,14 +377,14 @@ struct ServerSupervisorTests {
 	@Test("does not start a second server beside one another copy is running")
 	func leavesAnUnreachableServerOfAnotherCopyAlone() async {
 		let runner = FakeRunner()
-		runner.livePIDs = [900]
-		let record = ServerRecord(group: 4242, port: 28080, owner: 900)
+		runner.liveOwners = [.test(900)]
+		let record = ServerRecord(group: 4242, port: 28080, owner: .test(900))
 		let records = MemoryRecordStore(record: record)
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(false),
 			records: records,
-			owner: 901
+			owner: .test(901)
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
@@ -392,6 +392,47 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state == .running(owned: false))
 		#expect(runner.launched.isEmpty)
 		#expect(records.record == record)
+	}
+
+	@Test("starts the stack once Settings comes back to this machine")
+	func startsAfterSwitchingBackFromRemote() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+		let remote = ServerAddress(host: "build-box.local", port: 28080)!
+
+		await supervisor.use(address: remote, plan: .test)
+
+		#expect(supervisor.state == .remote)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
+		#expect(runner.launched == [.test])
+	}
+
+	@Test("does not treat a recycled owner pid as the app that started a server")
+	func refusesAnOwnerThatIsADifferentProcessNow() async {
+		let runner = FakeRunner()
+		runner.adoptable[4242] = FakeServerProcess(pid: 4242)
+		// The pid is in use, but by something that is not the app that wrote the record.
+		runner.liveOwners = [.test(900)]
+		let records = MemoryRecordStore(
+			record: ServerRecord(group: 4242, port: 28080, owner: ServerOwner(pid: 900, startedAt: 111))
+		)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			owner: .test(901)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .running(owned: true))
 	}
 
 	@Test("shows what the server prints")
@@ -423,6 +464,12 @@ private enum TestError: LocalizedError {
 	case noBinary
 
 	var errorDescription: String? { "No process-compose binary there" }
+}
+
+extension ServerOwner {
+	fileprivate static func test(_ pid: Int32) -> ServerOwner {
+		ServerOwner(pid: pid, startedAt: Int64(pid) * 1000)
+	}
 }
 
 extension ServerLaunchPlan {
@@ -460,7 +507,7 @@ private final class FakeRunner: ServerRunner {
 	var adoptable: [Int32: FakeServerProcess] = [:]
 	var failure: (any Error)?
 	var validation: ServerValidation = .valid
-	var livePIDs: Set<Int32> = []
+	var liveOwners: Set<ServerOwner> = []
 	private(set) var adoptedWith: Set<String> = []
 	var ignoresTerminate = false
 	private(set) var started: FakeServerProcess?
@@ -486,8 +533,8 @@ private final class FakeRunner: ServerRunner {
 		return adoptable[group]
 	}
 
-	func isRunning(pid: Int32) -> Bool {
-		livePIDs.contains(pid)
+	func isRunning(_ owner: ServerOwner) -> Bool {
+		liveOwners.contains(owner)
 	}
 }
 

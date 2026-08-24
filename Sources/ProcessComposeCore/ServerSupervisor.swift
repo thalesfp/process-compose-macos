@@ -53,7 +53,7 @@ public final class ServerSupervisor {
 	private let reachability: any ServerReachability
 	private let records: any ServerRecordStore
 	private let grace: Duration
-	private let owner: Int32
+	private let owner: ServerOwner
 
 	private var server: (any ServerProcess)?
 	private var watchTask: Task<Void, Never>?
@@ -71,7 +71,7 @@ public final class ServerSupervisor {
 		// process-compose runs its own shutdown commands, which it gives ten seconds by
 		// default, so a stack has to be allowed to finish before anything is forced.
 		grace: Duration = .seconds(12),
-		owner: Int32 = ProcessInfo.processInfo.processIdentifier
+		owner: ServerOwner = .current
 	) {
 		self.runner = runner
 		self.reachability = reachability
@@ -238,7 +238,7 @@ public final class ServerSupervisor {
 			record.port == address.port,
 			// A record whose app is still running belongs to that copy, and stopping its
 			// server would take the stack out from under it.
-			record.owner == owner || !runner.isRunning(pid: record.owner),
+			record.owner == owner || !runner.isRunning(record.owner),
 			let existing = runner.adopt(group: record.group, names: launchNames)
 		else {
 			state = .running(owned: false)
@@ -286,7 +286,7 @@ public final class ServerSupervisor {
 		// A server that is up but not answering yet still owns the port, and starting a
 		// second one would only replace the record that makes the first recoverable.
 		if let recorded = records.load(), recorded.port == plan.port {
-			if recorded.owner != owner, runner.isRunning(pid: recorded.owner) {
+			if recorded.owner != owner, runner.isRunning(recorded.owner) {
 				state = .running(owned: false)
 				return
 			}

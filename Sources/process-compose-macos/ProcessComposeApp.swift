@@ -88,5 +88,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 	// A quit the delegate never sees, such as a log out, still has to take the server with it.
 	func applicationWillTerminate(_ notification: Notification) {
 		ProcessComposeApp.server.stopOnQuit()
+		LiveServerRunner.endRunningChecks()
 	}
 }

@@ -4,15 +4,38 @@ import Foundation
 /// The server the app started, kept on disk so a crash does not leave one running that
 /// nothing owns. `owner` is the app that started it, so a second copy of the app can tell
 /// a server it may take over from one another copy is still running.
+/// Which app started a server. A pid alone is recycled, so the moment the process began
+/// goes with it: together they name one run of one app and nothing else.
+public struct ServerOwner: Codable, Sendable, Hashable {
+	public let pid: Int32
+	public let startedAt: Int64
+
+	public init(pid: Int32, startedAt: Int64) {
+		self.pid = pid
+		self.startedAt = startedAt
+	}
+
+	public static var current: ServerOwner {
+		let pid = ProcessInfo.processInfo.processIdentifier
+
+		return ServerOwner(pid: pid, startedAt: UnixProcess.startedAt(pid) ?? 0)
+	}
+
+	/// Whether this is still the running process it was written for.
+	public var isRunning: Bool {
+		UnixProcess.startedAt(pid) == startedAt
+	}
+}
+
 public struct ServerRecord: Codable, Sendable, Hashable {
 	/// The group the server leads, not one process in it. The configured binary can be a
 	/// script that starts process-compose and exits, and then no single pid outlives the
 	/// stack.
 	public let group: Int32
 	public let port: Int
-	public let owner: Int32
+	public let owner: ServerOwner
 
-	public init(group: Int32, port: Int, owner: Int32) {
+	public init(group: Int32, port: Int, owner: ServerOwner) {
 		self.group = group
 		self.port = port
 		self.owner = owner

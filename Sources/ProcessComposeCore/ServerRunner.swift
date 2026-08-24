@@ -27,14 +27,26 @@ public protocol ServerRunner {
 	/// Takes back a server recorded by an earlier run, or nil when its group is gone or now
 	/// holds processes none of `names` describes.
 	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)?
-	func isRunning(pid: Int32) -> Bool
+	func isRunning(_ owner: ServerOwner) -> Bool
 }
 
 public struct LiveServerRunner: ServerRunner {
 	private let validationTimeout: Duration
+	private let checks: RunningChecks
 
 	public init(validationTimeout: Duration = .seconds(30)) {
+		self.init(validationTimeout: validationTimeout, checks: .shared)
+	}
+
+	init(validationTimeout: Duration, checks: RunningChecks) {
 		self.validationTimeout = validationTimeout
+		self.checks = checks
+	}
+
+	/// Checks in flight right now. A check is a process group of its own, which the system
+	/// does not end with the app, so quitting has to end them itself.
+	public static func endRunningChecks() {
+		RunningChecks.shared.endAll()
 	}
 
 	public func run(_ plan: ServerLaunchPlan) throws -> any ServerProcess {
@@ -57,6 +69,9 @@ public struct LiveServerRunner: ServerRunner {
 		// The binary can be a script of the user's own, which can hang, wait on input that
 		// never comes, or leave a child holding the pipe, so reading is raced against the
 		// clock rather than trusted to finish.
+		checks.add(check)
+		defer { checks.remove(check) }
+
 		let reader = Task.detached {
 			let printed = check.read()
 			check.waitUntilExit()
@@ -112,8 +127,8 @@ public struct LiveServerRunner: ServerRunner {
 		check.reap()
 	}
 
-	public func isRunning(pid: Int32) -> Bool {
-		UnixProcess.isAlive(pid)
+	public func isRunning(_ owner: ServerOwner) -> Bool {
+		owner.isRunning
 	}
 
 	public func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
@@ -223,6 +238,37 @@ final class AdoptedServerProcess: ServerProcess {
 	}
 }
 
+/// The checks running now, so a quit can take them with it.
+final class RunningChecks: @unchecked Sendable {
+	static let shared = RunningChecks()
+
+	private let lock = NSLock()
+	private var checks: [ObjectIdentifier: GroupedProcess] = [:]
+
+	func add(_ check: GroupedProcess) {
+		lock.lock()
+		defer { lock.unlock() }
+
+		checks[ObjectIdentifier(check)] = check
+	}
+
+	func remove(_ check: GroupedProcess) {
+		lock.lock()
+		defer { lock.unlock() }
+
+		checks[ObjectIdentifier(check)] = nil
+	}
+
+	func endAll() {
+		lock.lock()
+		let running = Array(checks.values)
+		checks = [:]
+		lock.unlock()
+
+		for check in running { check.signal(SIGKILL) }
+	}
+}
+
 extension ServerValidation {
 	/// process-compose reports the fault as its last log line: coloured, prefixed with a
 	/// timestamp and a level, and carrying the detail in an `error="..."` field.
@@ -294,6 +340,21 @@ enum UnixProcess {
 		}
 
 		return entries.prefix(size / MemoryLayout<kinfo_proc>.stride).map(\.kp_proc.p_pid)
+	}
+
+	/// When the process began, in microseconds, or nothing when there is no such process.
+	static func startedAt(_ pid: pid_t) -> Int64? {
+		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+		var entry = kinfo_proc()
+		var size = MemoryLayout<kinfo_proc>.stride
+
+		guard sysctl(&request, UInt32(request.count), &entry, &size, nil, 0) == 0, size > 0 else {
+			return nil
+		}
+
+		let started = entry.kp_proc.p_un.__p_starttime
+
+		return Int64(started.tv_sec) * 1_000_000 + Int64(started.tv_usec)
 	}
 
 	static func name(of pid: Int32) -> String? {

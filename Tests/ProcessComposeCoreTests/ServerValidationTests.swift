@@ -263,8 +263,8 @@ struct ServerRecordStoreTests {
 		defer { try? FileManager.default.removeItem(at: directory) }
 
 		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
-		let mine = ServerRecord(group: 100, port: 28080, owner: 900)
-		let theirs = ServerRecord(group: 200, port: 28080, owner: 901)
+		let mine = ServerRecord(group: 100, port: 28080, owner: ServerOwner(pid: 900, startedAt: 1))
+		let theirs = ServerRecord(group: 200, port: 28080, owner: ServerOwner(pid: 901, startedAt: 2))
 
 		try store.save(mine)
 		try store.save(theirs)
@@ -275,6 +275,39 @@ struct ServerRecordStoreTests {
 		try store.clear(theirs)
 
 		#expect(store.load() == nil)
+	}
+}
+
+extension ServerProcessTests {
+	@Test("takes a check in flight with it when the app goes")
+	func endsRunningChecksOnQuit() async throws {
+		let directory = try scratchDirectory("quitting")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let plan = try wrapper(
+			in: directory,
+			"""
+			trap '' TERM
+			sleep 30 >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			wait
+			"""
+		)
+
+		let checks = RunningChecks()
+		let runner = LiveServerRunner(validationTimeout: .seconds(30), checks: checks)
+		let checking = Task { await runner.validate(plan) }
+		let child = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		checks.endAll()
+
+		await until { kill(child, 0) != 0 }
+
+		#expect(kill(child, 0) != 0)
+
+		checking.cancel()
 	}
 }
 
