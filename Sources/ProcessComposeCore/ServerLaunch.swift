@@ -101,6 +101,31 @@ public struct ServerLaunchPlan: Sendable, Hashable {
 		return environment
 	}
 
+	/// process-compose reads a `.pc_env` beside the config and where it runs, and what that
+	/// sets cannot be overridden by a flag or by the environment the app hands it. Anything in
+	/// there that would leave the app unable to talk to the server has to be found before the
+	/// server is started rather than after.
+	public func refusedSettings(
+		contents: (URL) -> String? = { try? String(contentsOf: $0, encoding: .utf8) }
+	) -> [String] {
+		let files = Set([workingDirectory, configuration.deletingLastPathComponent()])
+			.map { $0.appendingPathComponent(".pc_env") }
+
+		var found: Set<String> = []
+
+		for file in files {
+			guard let text = contents(file) else { continue }
+
+			for line in text.split(whereSeparator: \.isNewline) {
+				let name = String(line.prefix { $0 != "=" }).trimmingCharacters(in: .whitespaces)
+
+				if Self.refusedVariables.contains(name) { found.insert(name) }
+			}
+		}
+
+		return found.sorted()
+	}
+
 	/// The config of the server the app is attached to, so a stack started from a terminal
 	/// can be started from the app the next time. A config already set is left alone, and a
 	/// server built from several configs is left to the user, since one of them starts a

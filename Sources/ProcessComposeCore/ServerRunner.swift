@@ -59,6 +59,15 @@ public struct LiveServerRunner: ServerRunner {
 	}
 
 	public func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
+		let refused = plan.refusedSettings()
+
+		if !refused.isEmpty {
+			return .failed(
+				reason: "A .pc_env beside this config sets \(refused.joined(separator: ", ")), "
+					+ "which would leave the app unable to talk to the server"
+			)
+		}
+
 		let check: GroupedProcess
 		do {
 			check = try GroupedProcess.run(
@@ -78,11 +87,13 @@ public struct LiveServerRunner: ServerRunner {
 		// between SIGTERM and SIGKILL would otherwise find nothing to end.
 		checks.add(check)
 
-		let reader = Task.detached {
-			let printed = check.read()
-			check.waitUntilExit()
+		let reader = Task {
+			await onItsOwnThread {
+				let printed = check.read()
+				check.waitUntilExit()
 
-			return printed
+				return printed
+			}
 		}
 
 		let printed = await withTaskCancellationHandler {
@@ -186,6 +197,31 @@ final class SpawnedServerProcess: ServerProcess {
 
 		let started = check
 
+		// On a thread of its own: reading a pipe and waiting for a process both block, and
+		// blocking inside a task holds one of the few threads the concurrency pool has. Enough
+		// of those and everything else on it stops, the tracking below included.
+		Thread.detachNewThread {
+			let buffer = LineBuffer()
+			started.drain { data in
+				for line in buffer.take(data) { lineFeed.yield(line) }
+			}
+
+			// A server that says why it is going and exits may not end that with a newline.
+			if let last = buffer.rest() { lineFeed.yield(last) }
+
+			lineFeed.finish()
+
+			started.waitUntilExit()
+			let status = started.reap()
+
+			// The wrapper can go before what it started, and the stack is only over once
+			// nothing in the group is left.
+			while started.hasMembers { usleep(50_000) }
+
+			codeFeed.yield(status)
+			codeFeed.finish()
+		}
+
 		// Draining blocks, so the services the leader starts are looked for beside it:
 		// closely at first, since a wrapper can be gone in milliseconds, then rarely.
 		Task.detached {
@@ -213,27 +249,6 @@ final class SpawnedServerProcess: ServerProcess {
 			}
 		}
 
-		Task.detached {
-			let buffer = LineBuffer()
-			started.drain { data in
-				for line in buffer.take(data) { lineFeed.yield(line) }
-			}
-
-			// A server that says why it is going and exits may not end that with a newline.
-			if let last = buffer.rest() { lineFeed.yield(last) }
-
-			lineFeed.finish()
-
-			started.waitUntilExit()
-			let status = started.reap()
-
-			// The wrapper can go before what it started, and the stack is only over once
-			// nothing in the group is left.
-			while started.hasMembers { usleep(50_000) }
-
-			codeFeed.yield(status)
-			codeFeed.finish()
-		}
 	}
 
 	func exitCode() async -> Int32 {
@@ -349,6 +364,14 @@ extension ServerValidation {
 	}
 }
 
+/// Runs blocking work away from the concurrency pool, whose threads are few and must not be
+/// held by a read that may never return.
+func onItsOwnThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T {
+	await withCheckedContinuation { continuation in
+		Thread.detachNewThread { continuation.resume(returning: work()) }
+	}
+}
+
 /// Whichever of the reader and the clock answers first, once.
 private final class FirstAnswer: @unchecked Sendable {
 	private let lock = NSLock()
@@ -370,33 +393,6 @@ private final class FirstAnswer: @unchecked Sendable {
 }
 
 enum UnixProcess {
-	static func isAlive(_ pid: Int32) -> Bool {
-		guard pid > 0 else { return false }
-		// A process owned by another user answers EPERM, which still means it is there.
-		return Darwin.kill(pid, 0) == 0 || errno == EPERM
-	}
-
-	/// Every process the group still holds.
-	static func members(of group: pid_t) -> [pid_t] {
-		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PGRP, group]
-		var size = 0
-
-		guard sysctl(&request, UInt32(request.count), nil, &size, nil, 0) == 0, size > 0 else {
-			return []
-		}
-
-		let count = size / MemoryLayout<kinfo_proc>.stride
-		var entries = [kinfo_proc](repeating: kinfo_proc(), count: count)
-
-		guard sysctl(&request, UInt32(request.count), &entries, &size, nil, 0) == 0 else {
-			return []
-		}
-
-		return entries.prefix(size / MemoryLayout<kinfo_proc>.stride).map(\.kp_proc.p_pid)
-	}
-
-	/// The groups of everything the group's processes started. process-compose gives each
-	/// service a group of its own, and once its leader is gone nothing links them back.
 	static func groups(under group: pid_t) -> [pid_t: Set<ServerOwner>] {
 		groups(from: [], groups: [group])
 	}
@@ -404,52 +400,60 @@ enum UnixProcess {
 	/// Every group reachable from the processes given, with the identities holding each. The
 	/// walk starts from named processes as well as whole groups, since a stack can move out
 	/// of the group it was started in and go on starting services from there.
+	///
+	/// Asking the kernel for one group, and for one process's children at a time, costs far
+	/// less than copying the whole process table, which matters because this runs on a timer.
 	static func groups(from seeds: Set<pid_t>, groups seedGroups: Set<pid_t>) -> [pid_t: Set<ServerOwner>] {
-		var request: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_ALL, 0]
-		var size = 0
-
-		guard sysctl(&request, UInt32(request.count), nil, &size, nil, 0) == 0, size > 0 else {
-			return [:]
-		}
-
-		var entries = [kinfo_proc](repeating: kinfo_proc(), count: size / MemoryLayout<kinfo_proc>.stride)
-
-		guard sysctl(&request, UInt32(request.count), &entries, &size, nil, 0) == 0 else { return [:] }
-
-		let all = entries.prefix(size / MemoryLayout<kinfo_proc>.stride)
-		var children: [pid_t: [kinfo_proc]] = [:]
-		for entry in all { children[entry.kp_eproc.e_ppid, default: []].append(entry) }
-
-		var groups: [pid_t: Set<ServerOwner>] = [:]
-		var pending: [pid_t] = []
+		var found: [pid_t: Set<ServerOwner>] = [:]
 		var seen: Set<pid_t> = []
+		var pending: [pid_t] = []
 
-		func note(_ entry: kinfo_proc) {
-			let started = entry.kp_proc.p_un.__p_starttime
+		func note(_ pid: pid_t) {
+			guard seen.insert(pid).inserted else { return }
+			guard let group = group(of: pid), let startedAt = startedAt(pid) else { return }
 
-			groups[entry.kp_eproc.e_pgid, default: []].insert(
-				ServerOwner(
-					pid: entry.kp_proc.p_pid,
-					startedAt: Int64(started.tv_sec) * 1_000_000 + Int64(started.tv_usec)
-				)
-			)
+			found[group, default: []].insert(ServerOwner(pid: pid, startedAt: startedAt))
+			pending.append(pid)
 		}
 
-		for entry in all
-		where seedGroups.contains(entry.kp_eproc.e_pgid) || seeds.contains(entry.kp_proc.p_pid) {
-			note(entry)
-			seen.insert(entry.kp_proc.p_pid)
-			pending.append(entry.kp_proc.p_pid)
+		for group in seedGroups {
+			for pid in pids(inGroup: group) { note(pid) }
 		}
+
+		for pid in seeds { note(pid) }
 
 		while let parent = pending.popLast() {
-			for child in children[parent] ?? [] where seen.insert(child.kp_proc.p_pid).inserted {
-				note(child)
-				pending.append(child.kp_proc.p_pid)
-			}
+			for child in children(of: parent) { note(child) }
 		}
 
-		return groups
+		return found
+	}
+
+	static func pids(inGroup group: pid_t) -> [pid_t] {
+		list(PROC_PGRP_ONLY, group)
+	}
+
+	static func children(of pid: pid_t) -> [pid_t] {
+		list(PROC_PPID_ONLY, pid)
+	}
+
+	private static func list(_ kind: Int32, _ of: pid_t) -> [pid_t] {
+		let size = proc_listpids(UInt32(kind), UInt32(of), nil, 0)
+
+		guard size > 0 else { return [] }
+
+		var pids = [pid_t](repeating: 0, count: Int(size) / MemoryLayout<pid_t>.size)
+		let written = proc_listpids(UInt32(kind), UInt32(of), &pids, size)
+
+		guard written > 0 else { return [] }
+
+		return pids.prefix(Int(written) / MemoryLayout<pid_t>.size).filter { $0 > 0 }
+	}
+
+	static func isAlive(_ pid: Int32) -> Bool {
+		guard pid > 0 else { return false }
+		// A process owned by another user answers EPERM, which still means it is there.
+		return Darwin.kill(pid, 0) == 0 || errno == EPERM
 	}
 
 	/// The group a process is in now.

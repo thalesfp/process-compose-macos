@@ -149,7 +149,10 @@ final class GroupedProcess: @unchecked Sendable {
 		lock.lock()
 		defer { lock.unlock() }
 
-		return !liveMembers().isEmpty
+		// Whether the groups still hold anything, not whether the processes noted in them do:
+		// a launcher handing over to a child leaves the group occupied by something that has
+		// not been noted yet, and calling that gone would abandon a running stack.
+		return !liveGroups().isEmpty
 	}
 
 	/// Whether the child is over, without reaping it.

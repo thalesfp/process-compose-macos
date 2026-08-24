@@ -91,6 +91,25 @@ struct ServerLaunchTests {
 		#expect(plan.arguments.firstIndex(of: "--address").map { plan.arguments[$0 + 1] } == "localhost")
 	}
 
+	@Test("finds a .pc_env that would leave the app unable to talk to the server")
+	func findsARefusedSetting() throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				workingDirectoryPath: "/Users/dev",
+				port: 28080
+			)
+		)
+
+		let refused = plan.refusedSettings { file in
+			file.path == "/Users/dev/stack/.pc_env" ? "FOO=1\nPC_NO_SERVER=1\n" : nil
+		}
+
+		#expect(refused == ["PC_NO_SERVER"])
+		#expect(plan.refusedSettings { _ in "FOO=1" }.isEmpty)
+	}
+
 	@Test("refuses a plan without a config file")
 	func refusesEmptyConfiguration() {
 		#expect(ServerLaunchPlan(executablePath: "/bin/pc", configurationPath: "  ", port: 28080) == nil)

@@ -506,9 +506,14 @@ struct ManagedGroupTests {
 		let plan = try wrapper(
 			in: directory,
 			"""
-			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			perl -e '
+				setpgrp(0,0);
+				open(my $f, ">", "$ARGV[0]/moved"); print $f "y"; close($f);
+				exec("sleep", "30");
+			' "$(dirname "$0")" >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 2
+			while [ ! -f "$(dirname "$0")/moved" ]; do sleep 0.05; done
+			sleep 1
 			"""
 		)
 
@@ -587,9 +592,14 @@ struct ManagedGroupTests {
 		let plan = try wrapper(
 			in: directory,
 			"""
-			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			perl -e '
+				setpgrp(0,0);
+				open(my $f, ">", "$ARGV[0]/moved"); print $f "y"; close($f);
+				exec("sleep", "30");
+			' "$(dirname "$0")" >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 2
+			while [ ! -f "$(dirname "$0")/moved" ]; do sleep 0.05; done
+			sleep 1
 			"""
 		)
 
@@ -708,9 +718,14 @@ struct ManagedGroupTests {
 		let plan = try wrapper(
 			in: directory,
 			"""
-			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			perl -e '
+				setpgrp(0,0);
+				open(my $f, ">", "$ARGV[0]/moved"); print $f "y"; close($f);
+				exec("sleep", "30");
+			' "$(dirname "$0")" >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 2
+			while [ ! -f "$(dirname "$0")/moved" ]; do sleep 0.05; done
+			sleep 1
 			"""
 		)
 
@@ -749,9 +764,14 @@ struct ManagedGroupTests {
 		let plan = try wrapper(
 			in: directory,
 			"""
-			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			perl -e '
+				setpgrp(0,0);
+				open(my $f, ">", "$ARGV[0]/moved"); print $f "y"; close($f);
+				exec("sleep", "30");
+			' "$(dirname "$0")" >/dev/null 2>&1 &
 			echo $! > "$(dirname "$0")/child.pid"
-			sleep 2
+			while [ ! -f "$(dirname "$0")/moved" ]; do sleep 0.05; done
+			sleep 1
 			"""
 		)
 
