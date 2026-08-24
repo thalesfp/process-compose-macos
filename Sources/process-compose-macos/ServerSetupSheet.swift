@@ -135,14 +135,21 @@ struct ServerSetupSheet: View {
 	}
 
 	private func validate() {
-		guard let plan else { return }
+		guard let checked = plan else { return }
 
 		isValidating = true
 		validation = nil
 
 		Task {
-			validation = await LiveServerRunner().validate(plan)
+			let answer = await LiveServerRunner().validate(checked)
+
 			isValidating = false
+
+			// The rows stay live while a check runs, and a verdict on what used to be there
+			// must not be what Save is granted on.
+			guard checked == plan else { return }
+
+			validation = answer
 		}
 	}
 
