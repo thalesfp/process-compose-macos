@@ -274,7 +274,9 @@ final class GroupedProcess: @unchecked Sendable {
 			}
 
 			for group in liveGroups() { kill(-group, number) }
-		} else {
+		} else if liveGroups().contains(pid) {
+			// Only while the launch group still holds a process this one saw it hold: its
+			// number is handed out again once it is empty.
 			kill(-pid, number)
 		}
 

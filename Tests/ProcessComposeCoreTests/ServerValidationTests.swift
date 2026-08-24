@@ -530,6 +530,39 @@ struct ManagedGroupTests {
 		#expect(kill(service, 0) != 0)
 	}
 
+	@Test("does not ask a group that has since become someone else's to stop")
+	func doesNotSignalARecycledLaunchGroup() async throws {
+		let directory = try scratchDirectory("recycled")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let plan = try wrapper(
+			in: directory,
+			"""
+			perl -e 'setpgrp(0,0); exec("sleep", "30")' >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			sleep 0.5
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let service = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+		let leader = server.pid
+
+		await until { !UnixProcess.isAlive(leader) }
+
+		// The launch group is empty, so its number is free for another group to be given.
+		// Asking it to stop now would be asking whoever holds it next.
+		server.terminate()
+
+		#expect(server.isRunning)
+		#expect(kill(service, 0) == 0)
+
+		server.kill()
+		await until { kill(service, 0) != 0 }
+	}
+
 	@Test("stops a service the server put in a group of its own")
 	func stopsAServiceInItsOwnGroup() async throws {
 		let directory = try scratchDirectory("managed")

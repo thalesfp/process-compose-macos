@@ -69,9 +69,10 @@ public final class ServerSupervisor {
 		reachability: any ServerReachability = LiveServerReachability(),
 		records: any ServerRecordStore = FileServerRecordStore(),
 		log: ServerLog = ServerLog(),
-		// process-compose runs its own shutdown commands, which it gives ten seconds by
-		// default, so a stack has to be allowed to finish before anything is forced.
-		grace: Duration = .seconds(12),
+		// process-compose gives each of its own shutdown commands ten seconds by default, and
+		// runs them one after another when the config asks for an ordered shutdown, so a
+		// stack needs considerably longer than one of them before anything is forced.
+		grace: Duration = .seconds(60),
 		owner: ServerOwner = .current
 	) {
 		self.runner = runner
