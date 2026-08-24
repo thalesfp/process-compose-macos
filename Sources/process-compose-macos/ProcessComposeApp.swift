@@ -58,9 +58,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		guard let window = sender.mainWindow ?? sender.windows.first(where: \.isVisible) else {
 			guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
 
-			ProcessComposeApp.server.stopOnQuit()
+			Task { @MainActor in
+				await ProcessComposeApp.server.stop()
+				sender.reply(toApplicationShouldTerminate: true)
+			}
 
-			return .terminateNow
+			return .terminateLater
 		}
 
 		// A sheet drops from the window the stack belongs to, so the question arrives where

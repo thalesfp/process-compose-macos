@@ -155,6 +155,34 @@ struct ServerProcessTests {
 		#expect(kill(child, 0) != 0)
 	}
 
+	@Test("still stops the stack after the wrapper it started with is gone")
+	func signalsTheGroupAfterTheLeaderIsReaped() async throws {
+		let directory = try scratchDirectory("reaped")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		// The wrapper exits and lets go of the pipe, so it is reaped while its work runs on.
+		let plan = try wrapper(
+			in: directory,
+			"""
+			sleep 30 >/dev/null 2>&1 &
+			echo $! > "$(dirname "$0")/child.pid"
+			"""
+		)
+
+		let server = try LiveServerRunner().run(plan)
+		let child = try #require(
+			pid_t(try await recordedChild(in: directory.appendingPathComponent("child.pid")))
+		)
+
+		let leader = server.pid
+		await until { !UnixProcess.isAlive(leader) }
+
+		server.terminate()
+		await until { kill(child, 0) != 0 }
+
+		#expect(kill(child, 0) != 0)
+	}
+
 	@Test("counts the stack as running while the work outlives the wrapper")
 	func tracksTheWholeGroup() async throws {
 		let directory = try scratchDirectory("outliving")

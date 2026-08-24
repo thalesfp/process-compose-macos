@@ -23,6 +23,32 @@ public protocol ServerRecordStore: Sendable {
 	func load() -> ServerRecord?
 	func save(_ record: ServerRecord) throws
 	func clear(_ record: ServerRecord) throws
+	/// Held from the last look at the port until the record is written, so two copies of the
+	/// app cannot both find the port free and both start a server on it.
+	func claimLaunch() -> ServerLaunchClaim?
+}
+
+/// A claim on starting a server, released when it is let go of.
+public final class ServerLaunchClaim: Sendable {
+	private let gate: Int32
+
+	init?(path: String) {
+		let gate = open(path, O_CREAT | O_RDWR, 0o644)
+
+		guard gate >= 0 else { return nil }
+
+		guard flock(gate, LOCK_EX) == 0 else {
+			close(gate)
+			return nil
+		}
+
+		self.gate = gate
+	}
+
+	deinit {
+		flock(gate, LOCK_UN)
+		close(gate)
+	}
 }
 
 public struct FileServerRecordStore: ServerRecordStore {
@@ -66,6 +92,15 @@ public struct FileServerRecordStore: ServerRecordStore {
 
 			try FileManager.default.removeItem(at: url)
 		}
+	}
+
+	public func claimLaunch() -> ServerLaunchClaim? {
+		try? FileManager.default.createDirectory(
+			at: url.deletingLastPathComponent(),
+			withIntermediateDirectories: true
+		)
+
+		return ServerLaunchClaim(path: url.appendingPathExtension("launch").path)
 	}
 
 	// Copies of the app are separate processes, so the exclusion has to be one the system

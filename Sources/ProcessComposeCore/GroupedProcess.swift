@@ -10,6 +10,7 @@ final class GroupedProcess: @unchecked Sendable {
 	private let output: Int32
 	private let lock = NSLock()
 	private var reaped = false
+	private var finished = false
 
 	private let isOurs: Bool
 
@@ -185,11 +186,19 @@ final class GroupedProcess: @unchecked Sendable {
 		return raw & 0x7F == 0 ? (raw >> 8) & 0xFF : -1
 	}
 
+	/// Reaping the leader is not the end of the group: a wrapper that starts the server and
+	/// exits is reaped while the stack it left behind still has to be signalled. The id is
+	/// only free for reuse once nothing is left, so that is what closes signalling.
 	func signal(_ number: Int32) {
 		lock.lock()
 		defer { lock.unlock() }
 
-		guard !reaped else { return }
+		guard !finished else { return }
+
+		guard kill(-pid, 0) == 0 else {
+			finished = true
+			return
+		}
 
 		kill(-pid, number)
 	}

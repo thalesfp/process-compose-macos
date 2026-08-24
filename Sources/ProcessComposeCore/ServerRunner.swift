@@ -143,7 +143,9 @@ final class SpawnedServerProcess: ServerProcess {
 			environment: plan.environment(ProcessInfo.processInfo.environment)
 		)
 
-		let (lines, lineFeed) = AsyncStream<String>.makeStream()
+		// A stack can print faster than the pane reads, and the log's own limit cannot hold
+		// back a queue in front of it.
+		let (lines, lineFeed) = AsyncStream<String>.makeStream(bufferingPolicy: .bufferingNewest(4096))
 		let (codes, codeFeed) = AsyncStream<Int32>.makeStream(bufferingPolicy: .bufferingNewest(1))
 
 		output = lines
@@ -309,6 +311,10 @@ enum UnixProcess {
 /// Reassembles lines from pipe reads, which land on a background queue and split wherever
 /// the buffer happened to fill.
 private final class LineBuffer: @unchecked Sendable {
+	/// A process that writes a great deal without a newline, such as a progress bar, would
+	/// otherwise be held here in full.
+	static let longestLine = 1 << 20
+
 	private var pending = Data()
 	private let lock = NSLock()
 
@@ -317,6 +323,10 @@ private final class LineBuffer: @unchecked Sendable {
 		defer { lock.unlock() }
 
 		pending.append(data)
+
+		if pending.count > Self.longestLine {
+			pending.removeFirst(pending.count - Self.longestLine)
+		}
 
 		var lines: [String] = []
 		var start = pending.startIndex

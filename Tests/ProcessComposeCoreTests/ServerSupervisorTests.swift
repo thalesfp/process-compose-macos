@@ -512,6 +512,8 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 
 	func save(_ record: ServerRecord) throws { self.record = record }
 
+	func claimLaunch() -> ServerLaunchClaim? { nil }
+
 	func clear(_ record: ServerRecord) throws {
 		guard self.record == record else { return }
 

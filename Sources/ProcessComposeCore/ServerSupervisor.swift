@@ -270,7 +270,10 @@ public final class ServerSupervisor {
 		}
 
 		// Validation takes as long as the config does, and another copy of the app can claim
-		// the port while it runs, so the answer from before it is no longer good enough.
+		// the port while it runs, so the answer from before it is no longer good enough. The
+		// claim is held from that last look until the record is written.
+		let claim = records.claimLaunch()
+
 		if let address, await reachability.isReachable(address) {
 			guard isCurrent(mine) else { return }
 
@@ -287,6 +290,7 @@ public final class ServerSupervisor {
 			remember(ServerRecord(group: started.pid, port: plan.port, owner: owner))
 			state = .running(owned: true)
 			watch(started)
+			_ = claim
 		} catch {
 			state = .failed(reason: error.localizedDescription)
 		}
