@@ -373,11 +373,21 @@ public final class ServerSupervisor {
 
 		guard isCurrent(mine) else { return }
 
-		if let address, await reachability.look(at: address) != .nothing {
+		if let address {
+			let presence = await reachability.look(at: address)
+
 			guard isCurrent(mine) else { return }
 
-			attach(on: address, under: claim)
-			return
+			switch presence {
+			case .processCompose:
+				attach(on: address, under: claim)
+				return
+			case .occupied:
+				state = .failed(reason: "Something that is not process-compose answers on port \(address.port)")
+				return
+			case .nothing:
+				break
+			}
 		}
 
 		guard isCurrent(mine) else { return }

@@ -583,6 +583,24 @@ struct ServerSupervisorTests {
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
 	}
 
+	@Test("starts nothing when the port is taken while the config is being checked")
+	func refusesAPortTakenDuringValidation() async {
+		let runner = FakeRunner()
+		let reachability = FakeReachability(.nothing)
+		// Something binds the port while the check runs.
+		runner.whileValidating = { reachability.presence = .occupied }
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: reachability,
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(runner.launched.isEmpty)
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+	}
+
 	@Test("shows what the server prints")
 	func collectsServerOutput() async {
 		let runner = FakeRunner()
@@ -681,8 +699,12 @@ private final class FakeRunner: ServerRunner {
 		return process
 	}
 
+	nonisolated(unsafe) var whileValidating: (() -> Void)?
+
 	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
-		validation
+		whileValidating?()
+
+		return validation
 	}
 
 	func adopt(group: Int32, names: Set<String>) -> (any ServerProcess)? {
