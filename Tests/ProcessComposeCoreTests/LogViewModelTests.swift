@@ -127,6 +127,12 @@ struct LogViewModelTests {
 		#expect(viewModel.visibleLines.map(\.text) == ["listening on 3001"])
 	}
 
+	@Test("says how much of the buffer a filter is hiding")
+	func describesTheFilteredCount() {
+		#expect(LogFilter.countLabel(visible: 12, total: 400, filter: "error") == "12 of 400 lines")
+		#expect(LogFilter.countLabel(visible: 400, total: 400, filter: "") == "400 lines")
+	}
+
 	@Test("drops the filter when another process is selected")
 	func clearsFilterOnSelectionChange() async {
 		let client = StubClient()

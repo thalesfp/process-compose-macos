@@ -78,15 +78,14 @@ struct StackView: View {
 			presenting: model.stopTarget
 		) { target in
 			Button(model.stopConfirmation(for: target), role: .destructive) {
-				Task { await model.stop(target) }
-			}
-		}
-		.confirmationDialog(
-			model.stopServerQuestion,
-			isPresented: $windowState.isConfirmingStopServer
-		) {
-			Button("Stop the server", role: .destructive) {
-				Task { await server.stop() }
+				Task {
+					// Only the server is not this model's to stop.
+					if case .server = target {
+						await server.stop()
+					} else {
+						await model.stop(target)
+					}
+				}
 			}
 		}
 	}
@@ -128,25 +127,14 @@ struct StackView: View {
 					.accessibilityLabel(
 						"\(project.name), \(project.runningCount) of \(project.processCount) running"
 					)
-					.contextMenu { projectActions(for: project.name) }
+					.contextMenu {
+						ProjectActions(model: model, project: project.name)
+						Divider()
+						Button("Copy Name") { NSPasteboard.copy(project.name) }
+					}
 			}
 		}
 		.navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 300)
-	}
-
-	/// The sidebar's context menu and the Stack menu offer the same project actions, so
-	/// the two can never disagree about what a project can do.
-	@ViewBuilder
-	private func projectActions(for name: String) -> some View {
-		Button("Start All in \(name)") { Task { await model.startProject(name) } }
-			.disabled(!model.canStartProject(name))
-
-		Button("Stop All in \(name)...") { model.stopTarget = .project(name) }
-			.disabled(!model.canStopProject(name))
-
-		Divider()
-
-		Button("Copy Name") { NSPasteboard.copy(name) }
 	}
 
 	@ToolbarContentBuilder
@@ -222,7 +210,7 @@ struct StackView: View {
 			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { windowState.isConfirmingStopServer = true }
+			Button("Stop Server...") { model.stopTarget = .server }
 				.disabled(!server.isOwned)
 
 			Button("Set Up Server...") { windowState.isSettingUpServer = true }
@@ -232,8 +220,8 @@ struct StackView: View {
 			Button("Show Server Log") { windowState.isShowingServerLog = true }
 				.disabled(windowState.isShowingServerLog)
 
-			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
-				.disabled(configURLs.isEmpty)
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
+				.disabled(model.configURLs.isEmpty)
 		} label: {
 			statusDot("Server", color: serverColor, describedBy: help)
 		}
@@ -286,10 +274,6 @@ struct StackView: View {
 				address: $0
 			)
 		}
-	}
-
-	private var configURLs: [URL] {
-		(model.project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
 	}
 
 	private var mcpHelp: String {

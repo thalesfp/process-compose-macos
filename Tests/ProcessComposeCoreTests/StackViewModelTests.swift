@@ -453,7 +453,7 @@ struct StackViewModelTests {
 
 		await viewModel.observe()
 
-		#expect(viewModel.stopServerQuestion == "Stop the server and 2 running processes?")
+		#expect(viewModel.stopQuestion(for: .server) == "Stop the server and 2 running processes?")
 	}
 
 	@Test("asks about the server alone when nothing is running")
@@ -466,7 +466,7 @@ struct StackViewModelTests {
 
 		await viewModel.observe()
 
-		#expect(viewModel.stopServerQuestion == "Stop the server?")
+		#expect(viewModel.stopQuestion(for: .server) == "Stop the server?")
 	}
 
 	@Test("offers nothing when no processes are known")

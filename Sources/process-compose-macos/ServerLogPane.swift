@@ -15,15 +15,17 @@ struct ServerLogPane: View {
 	@FocusState private var isFilterFocused: Bool
 
 	var body: some View {
-		VStack(spacing: 0) {
-			header
+		let visible = LogFilter.matching(log.lines, filter: filter)
+
+		return VStack(spacing: 0) {
+			header(visible: visible.count)
 			Divider()
-			output
+			output(visible)
 		}
 		.onChange(of: windowState.filterFocusToken) { isFilterFocused = true }
 	}
 
-	private var header: some View {
+	private func header(visible: Int) -> some View {
 		HStack(spacing: 10) {
 			Image(systemName: "server.rack")
 				.foregroundStyle(.secondary)
@@ -42,7 +44,7 @@ struct ServerLogPane: View {
 
 			LogFilterField(text: $filter, isFocused: $isFilterFocused)
 
-			Text(countLabel)
+			Text(LogFilter.countLabel(visible: visible, total: log.lines.count, filter: filter))
 				.font(.caption.monospacedDigit())
 				.foregroundStyle(.secondary)
 
@@ -63,24 +65,12 @@ struct ServerLogPane: View {
 		.padding(.vertical, 7)
 	}
 
-	private var visibleLines: [LogLine] {
-		LogFilter.matching(log.lines, filter: filter)
-	}
-
-	private var countLabel: String {
-		filter.isEmpty
-			? "\(log.lines.count) lines"
-			: "\(visibleLines.count) of \(log.lines.count) lines"
-	}
-
 	@ViewBuilder
-	private var output: some View {
+	private func output(_ visible: [LogLine]) -> some View {
 		if log.lines.isEmpty {
 			LogPlaceholder("The app has not started a server, so there is nothing to read here")
-		} else if visibleLines.isEmpty {
-			LogPlaceholder("No lines match \"\(filter)\"")
 		} else {
-			LogTextView(lines: visibleLines, fontSize: fontSize, isFollowing: isFollowing)
+			FilteredLog(lines: visible, filter: filter, fontSize: fontSize, isFollowing: isFollowing)
 		}
 	}
 }

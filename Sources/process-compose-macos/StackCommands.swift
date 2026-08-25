@@ -69,11 +69,7 @@ struct StackCommands: Commands {
 
 			Divider()
 
-			Button(projectTitle("Start All")) { runOnProject(model.startProject) }
-				.disabled(!projectAction(model.canStartProject))
-
-			Button(projectTitle("Stop All") + "...") { model.selectedProject.map { model.stopTarget = .project($0) } }
-				.disabled(!projectAction(model.canStopProject))
+			ProjectActions(model: model, project: model.selectedProject)
 
 			Divider()
 
@@ -93,7 +89,7 @@ struct StackCommands: Commands {
 				.keyboardShortcut("r", modifiers: [.command, .option])
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { windowState.isConfirmingStopServer = true }
+			Button("Stop Server...") { model.stopTarget = .server }
 				.keyboardShortcut(".", modifiers: [.command, .option])
 				.disabled(!server.isOwned)
 
@@ -108,8 +104,8 @@ struct StackCommands: Commands {
 
 			Divider()
 
-			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
-				.disabled(configURLs.isEmpty)
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
+				.disabled(model.configURLs.isEmpty)
 		}
 
 		CommandMenu("Log") {
@@ -127,25 +123,8 @@ struct StackCommands: Commands {
 		}
 	}
 
-	private var configURLs: [URL] {
-		(model.project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
-	}
-
 	private func title(_ verb: String) -> String {
 		model.selection.map { "\(verb) \($0)" } ?? verb
-	}
-
-	private func projectTitle(_ verb: String) -> String {
-		model.selectedProject.map { "\(verb) in \($0)" } ?? verb
-	}
-
-	private func projectAction(_ predicate: (String) -> Bool) -> Bool {
-		model.selectedProject.map(predicate) ?? false
-	}
-
-	private func runOnProject(_ action: @escaping (String) async -> Void) {
-		guard let name = model.selectedProject else { return }
-		Task { await action(name) }
 	}
 
 	private func run(_ action: @escaping (String) async -> Void) {

@@ -181,6 +181,10 @@ extension ProcessState {
 		}
 	}
 	public var canStop: Bool { isRunning }
+
+	/// Startable and not switched off by the config. Turning a disabled process on is a
+	/// decision made on its own row, so nothing that starts a group of them includes it.
+	public var isStartable: Bool { canStart && status != .disabled }
 }
 
 public struct ProcessStateEvent: Decodable, Sendable {

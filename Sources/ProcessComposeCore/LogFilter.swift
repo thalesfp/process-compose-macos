@@ -8,4 +8,9 @@ public enum LogFilter {
 
 		return lines.filter { $0.text.localizedCaseInsensitiveContains(filter) }
 	}
+
+	/// How a pane says what it is showing: the whole buffer, or the part a filter kept.
+	public static func countLabel(visible: Int, total: Int, filter: String) -> String {
+		filter.isEmpty ? "\(total) lines" : "\(visible) of \(total) lines"
+	}
 }

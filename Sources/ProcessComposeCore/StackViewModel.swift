@@ -12,6 +12,7 @@ public enum StackPower: Sendable, Equatable {
 public enum StopTarget: Sendable, Equatable {
 	case everything
 	case project(String)
+	case server
 }
 
 public enum ConnectionState: Sendable, Equatable {
@@ -44,7 +45,7 @@ public final class StackViewModel {
 	}
 
 	public var startableProcesses: [ProcessState] {
-		processes.filter { $0.canStart && $0.status != .disabled }
+		processes.filter(\.isStartable)
 	}
 
 	/// Which way the power button points.
@@ -69,6 +70,11 @@ public final class StackViewModel {
 			return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
 		case .project(let name):
 			return "Stop \(Self.runningLabel(stoppableProcesses(in: name).count)) in \(name)?"
+		case .server:
+			// Stopping the server takes every process with it, whichever project is showing.
+			let count = runningProcesses.count
+
+			return count == 0 ? "Stop the server?" : "Stop the server and \(Self.runningLabel(count))?"
 		}
 	}
 
@@ -76,22 +82,12 @@ public final class StackViewModel {
 		switch target {
 		case .everything: "Stop the stack"
 		case .project(let name): "Stop \(name)"
+		case .server: "Stop the server"
 		}
 	}
 
 	private static func runningLabel(_ count: Int) -> String {
 		count == 1 ? "1 running process" : "\(count) running processes"
-	}
-
-	/// Stopping the server takes every process with it, whichever project the window
-	/// is showing, so the confirmation counts them all.
-	public var stopServerQuestion: String {
-		let count = runningProcesses.count
-		guard count > 0 else { return "Stop the server?" }
-
-		let label = count == 1 ? "1 running process" : "\(count) running processes"
-
-		return "Stop the server and \(label)?"
 	}
 
 	/// Stopping asks first because it is destructive; starting does not.
@@ -120,7 +116,7 @@ public final class StackViewModel {
 	}
 
 	public var visibleProcesses: [ProcessState] {
-		projects.first { $0.name == selectedProject }?.processes ?? []
+		selectedProject.map(processes(in:)) ?? []
 	}
 
 	public var sections: [StackSection] {
@@ -159,6 +155,10 @@ public final class StackViewModel {
 			return
 		}
 		uptime = project.upTime + .seconds(now().timeIntervalSince(projectReadAt))
+	}
+
+	public var configURLs: [URL] {
+		(project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
 	}
 
 	public var usage: ResourceUsage {
@@ -268,10 +268,12 @@ public final class StackViewModel {
 		}
 	}
 
+	/// The server is not this model's to stop, so `.server` is the window's to dispatch.
 	public func stop(_ target: StopTarget) async {
 		switch target {
 		case .everything: await stopStack()
 		case .project(let name): await stopProject(name)
+		case .server: break
 		}
 	}
 
@@ -302,7 +304,7 @@ public final class StackViewModel {
 	}
 
 	private func startableProcesses(in project: String) -> [ProcessState] {
-		processes(in: project).filter { $0.canStart && $0.status != .disabled }
+		processes(in: project).filter(\.isStartable)
 	}
 
 	private func stoppableProcesses(in project: String) -> [ProcessState] {
