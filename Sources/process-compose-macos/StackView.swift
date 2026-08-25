@@ -80,17 +80,17 @@ struct StackView: View {
 		}
 		.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
 		.confirmationDialog(
-			model.confirmTarget.map(model.question) ?? "",
+			model.confirmation.map { model.question(for: $0.target) } ?? "",
 			isPresented: isConfirming,
-			presenting: model.confirmTarget
-		) { target in
-			Button(model.confirmation(for: target), role: target.isDestructive ? .destructive : nil) {
+			presenting: model.confirmation
+		) { confirmation in
+			Button(model.answer(for: confirmation.target), role: confirmation.target.isDestructive ? .destructive : nil) {
 				Task {
 					// Only the server is not this model's to stop.
-					if case .stopServer(let identity) = target {
+					if case .stopServer(let identity) = confirmation.target {
 						await server.stop(expecting: identity)
 					} else {
-						await model.perform(target)
+						await model.perform(confirmation)
 					}
 				}
 			}
@@ -101,8 +101,8 @@ struct StackView: View {
 	/// name rather than leaving a stop the user backed out of pending.
 	private var isConfirming: Binding<Bool> {
 		Binding(
-			get: { model.confirmTarget != nil },
-			set: { if !$0 { model.confirmTarget = nil } }
+			get: { model.confirmation != nil },
+			set: { if !$0 { model.confirmation = nil } }
 		)
 	}
 
@@ -217,7 +217,7 @@ struct StackView: View {
 			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { model.confirmTarget = .stopServer(identity: server.identity) }
+			Button("Stop Server...") { model.ask(.stopServer(identity: server.identity)) }
 				.disabled(!server.isOwned)
 
 			Button("Set Up Server...") { windowState.isSettingUpServer = true }

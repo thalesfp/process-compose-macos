@@ -10,11 +10,11 @@ public enum StackPower: Sendable, Equatable {
 /// What the window is asking the user to confirm. Every question goes through one
 /// target, so only one can ever be in flight.
 public enum ConfirmTarget: Sendable, Equatable {
-	case stopStack
-	case stopProject(String)
+	case stopStack(promised: [String])
+	case stopProject(String, promised: [String])
 	/// Carries the server the question was asked about, so the answer cannot land on another.
 	case stopServer(identity: Int)
-	case startProject(String)
+	case startProject(String, missing: [String])
 
 	/// Starting is the only one of these that does not take something away.
 	public var isDestructive: Bool {
@@ -27,6 +27,13 @@ public enum ConnectionState: Sendable, Equatable {
 	case connecting
 	case connected
 	case disconnected(reason: String)
+}
+
+/// A question and the moment it was asked. An answer captured before the work was
+/// abandoned cannot be acted on afterwards.
+public struct Confirmation: Sendable, Equatable {
+	public let target: ConfirmTarget
+	let epoch: Int
 }
 
 @MainActor
@@ -44,7 +51,7 @@ public final class StackViewModel {
 
 	/// What the window is asking the user to confirm, if anything. Owned here because the
 	/// toolbar button, the menu bar and the sidebar all raise it.
-	public var confirmTarget: ConfirmTarget?
+	public var confirmation: Confirmation?
 
 	public private(set) var isChangingStack = false
 
@@ -78,13 +85,15 @@ public final class StackViewModel {
 	/// the confirmation says how far the stop goes.
 	public func question(for target: ConfirmTarget) -> String {
 		switch target {
-		case .stopStack:
-			let projectCount = projects.filter { $0.runningCount > 0 }.count
-			let label = Self.runningLabel(runningProcesses.count)
+		case .stopStack(let promised):
+			// Read from what the question promised, so the words cannot drift from what
+			// answering it will actually do while it sits on screen.
+			let label = Self.runningLabel(promised.count)
+			let projectCount = Set(promised.map { projectsByProcess[$0] ?? ProcessGrouping.ungrouped }).count
 
 			return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
-		case .stopProject(let name):
-			return "Stop \(Self.runningLabel(stoppableProcesses(in: name).count)) in \(name)?"
+		case .stopProject(let name, let promised):
+			return "Stop \(Self.runningLabel(promised.count)) in \(name)?"
 		case .stopServer:
 			// The server can be ours to stop while the app has no list of what it is
 			// running, and a question that then said nothing was running would understate it.
@@ -95,21 +104,21 @@ public final class StackViewModel {
 			let count = runningProcesses.count
 
 			return count == 0 ? "Stop the server?" : "Stop the server and \(Self.runningLabel(count))?"
-		case .startProject(let name):
-			let missing = missingDependencies(startingProject: name)
-				.map { "\($0) in \(projectsByProcess[$0] ?? ProcessGrouping.ungrouped)" }
-			let verb = missing.count == 1 ? "is" : "are"
+		case .startProject(let name, let missing):
+			let named = missing.map { "\($0) in \(projectsByProcess[$0] ?? ProcessGrouping.ungrouped)" }
+			let verb = named.count == 1 ? "is" : "are"
 
-			return "\(name) depends on \(missing.joined(separator: ", ")), which \(verb) not running. Start \(name) anyway?"
+			return "\(name) depends on \(named.joined(separator: ", ")), which \(verb) not running. Start \(name) anyway?"
 		}
 	}
 
-	public func confirmation(for target: ConfirmTarget) -> String {
+	/// What the button that answers the question says.
+	public func answer(for target: ConfirmTarget) -> String {
 		switch target {
 		case .stopStack: "Stop the stack"
-		case .stopProject(let name): "Stop \(name)"
+		case .stopProject(let name, _): "Stop \(name)"
 		case .stopServer: "Stop the server"
-		case .startProject(let name): "Start \(name)"
+		case .startProject(let name, _): "Start \(name)"
 		}
 	}
 
@@ -122,7 +131,7 @@ public final class StackViewModel {
 		guard canChangePower else { return }
 
 		switch power {
-		case .canStop: confirmTarget = .stopStack
+		case .canStop: ask(.stopStack(promised: runningProcesses.map(\.name).sorted()))
 		case .canStart: Task { await startStack() }
 		case .unavailable: break
 		}
@@ -197,11 +206,6 @@ public final class StackViewModel {
 	private var groupingError: String?
 	private var actionEpoch = 0
 	private var connectedAddress: ServerAddress?
-	/// What the open question said would be left stopped, so consent can be checked against
-	/// what the server says when the answer finally comes back.
-	private var confirmedDependencies: [String] = []
-	/// What the open stop question said it would stop, so a reload cannot widen it.
-	private var confirmedProcesses: [String] = []
 	private var adopting: Set<String> = []
 	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
@@ -280,9 +284,12 @@ public final class StackViewModel {
 	/// even when it is reached at the same address.
 	public func abandonActions() {
 		actionEpoch += 1
-		confirmTarget = nil
-		confirmedDependencies = []
-		confirmedProcesses = []
+		confirmation = nil
+	}
+
+	/// Raises a question, stamped with the moment it was asked.
+	public func ask(_ target: ConfirmTarget) {
+		confirmation = Confirmation(target: target, epoch: actionEpoch)
 	}
 
 	public func isBusy(_ name: String?) -> Bool {
@@ -332,13 +339,20 @@ public final class StackViewModel {
 		}
 	}
 
-	public func stopStack() async {
+	public func stopStack(promised: [String]? = nil) async {
 		guard canChangePower else { return refuse("stop", "the stack") }
 
 		await applyToStack(
 			touching: processes.map(\.name),
 			stopping: true,
 			failureVerb: "stop",
+			validate: {
+				guard let promised else { return nil }
+
+				return self.runningProcesses.map(\.name).sorted() == promised
+					? nil
+					: "What is running changed while the question was open, so nothing was stopped"
+			},
 			select: { self.runningProcesses.map(\.name) }
 		) { client, name in
 			try await client.stop(name)
@@ -346,11 +360,14 @@ public final class StackViewModel {
 	}
 
 	/// The server is not this model's to stop, so `.stopServer` is the window's to dispatch.
-	public func perform(_ target: ConfirmTarget) async {
-		switch target {
-		case .stopStack: await stopStack()
-		case .stopProject(let name): await stopProject(name, confirmed: true)
-		case .startProject(let name): await startProject(name, confirmed: true)
+	public func perform(_ confirmation: Confirmation) async {
+		// The question was asked before this work was abandoned, so its answer is void.
+		guard confirmation.epoch == actionEpoch else { return }
+
+		switch confirmation.target {
+		case .stopStack(let promised): await stopStack(promised: promised)
+		case .stopProject(let name, let promised): await stopProject(name, promised: promised)
+		case .startProject(let name, let missing): await startProject(name, promisedMissing: missing)
 		case .stopServer: break
 		}
 	}
@@ -363,8 +380,7 @@ public final class StackViewModel {
 		let missing = missingDependencies(startingProject: name)
 
 		guard missing.isEmpty else {
-			confirmedDependencies = missing
-			confirmTarget = .startProject(name)
+			ask(.startProject(name, missing: missing))
 			return
 		}
 
@@ -400,7 +416,7 @@ public final class StackViewModel {
 
 	/// Starts a single project's processes, leaving every other project alone. The
 	/// config's disabled processes stay off, as they do for the whole stack.
-	public func startProject(_ name: String, confirmed: Bool = false) async {
+	public func startProject(_ name: String, promisedMissing: [String]? = nil) async {
 		guard canStartProject(name) else { return refuse("start", name) }
 
 		await applyToStack(
@@ -410,15 +426,15 @@ public final class StackViewModel {
 			validate: {
 				let missing = self.missingDependencies(startingProject: name)
 
-				guard !confirmed else {
-					return missing == self.confirmedDependencies
-						? nil
-						: "What \(name) depends on changed while the question was open, so nothing was started"
+				guard let promisedMissing else {
+					guard !missing.isEmpty else { return nil }
+
+					return "\(name) depends on \(missing.joined(separator: ", ")), which is not running, so nothing was started"
 				}
 
-				guard !missing.isEmpty else { return nil }
-
-				return "\(name) depends on \(missing.joined(separator: ", ")), which is not running, so nothing was started"
+				return missing == promisedMissing
+					? nil
+					: "What \(name) depends on changed while the question was open, so nothing was started"
 			},
 			select: { self.startableProcesses(in: name).map(\.name) }
 		) { client, process in
@@ -430,11 +446,10 @@ public final class StackViewModel {
 	public func requestStopProject(_ name: String) {
 		guard canStopProject(name) else { return refuse("stop", name) }
 
-		confirmedProcesses = stoppableProcesses(in: name).map(\.name).sorted()
-		confirmTarget = .stopProject(name)
+		ask(.stopProject(name, promised: stoppableProcesses(in: name).map(\.name).sorted()))
 	}
 
-	public func stopProject(_ name: String, confirmed: Bool = false) async {
+	public func stopProject(_ name: String, promised: [String]? = nil) async {
 		guard canStopProject(name) else { return refuse("stop", name) }
 
 		await applyToStack(
@@ -442,9 +457,9 @@ public final class StackViewModel {
 			stopping: true,
 			failureVerb: "stop",
 			validate: {
-				guard confirmed else { return nil }
+				guard let promised else { return nil }
 
-				return self.stoppableProcesses(in: name).map(\.name).sorted() == self.confirmedProcesses
+				return self.stoppableProcesses(in: name).map(\.name).sorted() == promised
 					? nil
 					: "What is running in \(name) changed while the question was open, so nothing was stopped"
 			},

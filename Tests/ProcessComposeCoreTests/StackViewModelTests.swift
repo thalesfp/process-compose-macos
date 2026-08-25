@@ -398,7 +398,7 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.question(for: .stopStack) == "Stop 2 running processes across 2 projects?")
+		#expect(viewModel.question(for: .stopStack(promised: ["api", "chatbot"])) == "Stop 2 running processes across 2 projects?")
 	}
 
 	@Test("asks about the processes alone when one project has all of them")
@@ -411,7 +411,7 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.question(for: .stopStack) == "Stop 1 running process?")
+		#expect(viewModel.question(for: .stopStack(promised: ["api"])) == "Stop 1 running process?")
 	}
 
 	@Test("asks only about the project a stop names")
@@ -427,7 +427,7 @@ struct StackViewModelTests {
 
 		await viewModel.observe()
 
-		#expect(viewModel.question(for: .stopProject("acme")) == "Stop 2 running processes in acme?")
+		#expect(viewModel.question(for: .stopProject("acme", promised: ["api", "worker"])) == "Stop 2 running processes in acme?")
 	}
 
 	@Test("stops only the processes of the project it was given")
@@ -443,7 +443,7 @@ struct StackViewModelTests {
 		await settle(viewModel)
 
 		viewModel.requestStopProject("acme")
-		await viewModel.perform(.stopProject("acme"))
+		await viewModel.perform(viewModel.confirmation!)
 
 		#expect(client.stopped == ["api"])
 
@@ -666,8 +666,8 @@ struct StackViewModelTests {
 
 		viewModel.requestStartProject("acme")
 
-		#expect(viewModel.confirmTarget == .startProject("acme"))
-		#expect(viewModel.question(for: .startProject("acme"))
+		#expect(viewModel.confirmation?.target == .startProject("acme", missing: ["db"]))
+		#expect(viewModel.question(for: .startProject("acme", missing: ["db"]))
 			== "acme depends on db in chatbot-ai, which is not running. Start acme anyway?")
 		#expect(client.started.isEmpty)
 
@@ -928,11 +928,11 @@ struct StackViewModelTests {
 		await settle(viewModel)
 
 		viewModel.requestStartProject("acme")
-		#expect(viewModel.confirmTarget == .startProject("acme"))
+		#expect(viewModel.confirmation?.target == .startProject("acme", missing: ["db"]))
 
 		// The stack is reloaded while the question is on screen.
 		client.dependencies = ["api": ["db", "cache"]]
-		await viewModel.perform(.startProject("acme"))
+		await viewModel.perform(viewModel.confirmation!)
 
 		#expect(client.started.isEmpty)
 		#expect(viewModel.lastError == "What acme depends on changed while the question was open, so nothing was started")
@@ -974,11 +974,11 @@ struct StackViewModelTests {
 
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
-		viewModel.confirmTarget = .stopProject("acme")
+		viewModel.ask(.stopProject("acme", promised: ["api"]))
 
 		viewModel.use(StubClient(processes: []))
 
-		#expect(viewModel.confirmTarget == nil)
+		#expect(viewModel.confirmation == nil)
 
 		client.finishStream()
 		await session.value
@@ -1023,12 +1023,12 @@ struct StackViewModelTests {
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
 		viewModel.use(client, at: .standard)
-		viewModel.confirmTarget = .stopProject("acme")
+		viewModel.ask(.stopProject("acme", promised: ["api"]))
 
 		// A second window builds its own client for the very same address.
 		viewModel.use(StubClient(processes: []), at: .standard)
 
-		#expect(viewModel.confirmTarget == .stopProject("acme"))
+		#expect(viewModel.confirmation?.target == .stopProject("acme", promised: ["api"]))
 
 		client.finishStream()
 		await session.value
@@ -1050,7 +1050,7 @@ struct StackViewModelTests {
 
 		// A reload moves extra into acme while the question is on screen.
 		client.workingDirs["extra"] = "acme/extra"
-		await viewModel.perform(.stopProject("acme"))
+		await viewModel.perform(viewModel.confirmation!)
 
 		#expect(client.stopped.isEmpty)
 		#expect(viewModel.lastError == "What is running in acme changed while the question was open, so nothing was stopped")
@@ -1074,6 +1074,59 @@ struct StackViewModelTests {
 		#expect(viewModel.connection != .disconnected(reason: "Settings has no usable server address"))
 	}
 
+	@Test("stops nothing when a process starts while the stack question is open")
+	func abandonsAConfirmedStackStopWhenSomethingStarted() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.togglePower()
+		#expect(viewModel.confirmation?.target == .stopStack(promised: ["api"]))
+
+		// worker comes up while the question is on screen.
+		client.emit(.init(
+			state: .init(name: "worker", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.runningProcesses.count == 2 })
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "What is running changed while the question was open, so nothing was stopped")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does nothing with an answer captured before the work was abandoned")
+	func ignoresAnAnswerCapturedBeforeAbandonment() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStopProject("acme")
+		let captured = try! #require(viewModel.confirmation)
+
+		// The server behind the address is replaced while the question is on screen.
+		viewModel.abandonActions()
+		await viewModel.perform(captured)
+
+		#expect(client.stopped.isEmpty)
+
+		client.finishStream()
+		await session.value
+	}
+
 	@Test("does not ask when the dependency it needs is already up")
 	func doesNotAskAboutADependencyAlreadyRunning() async {
 		let client = StubClient(processes: [
@@ -1090,7 +1143,7 @@ struct StackViewModelTests {
 		viewModel.requestStartProject("acme")
 		await settle(until: { client.started == ["api"] })
 
-		#expect(viewModel.confirmTarget == nil)
+		#expect(viewModel.confirmation == nil)
 		#expect(client.started == ["api"])
 
 		client.finishStream()
@@ -1113,7 +1166,7 @@ struct StackViewModelTests {
 		viewModel.requestStartProject("acme")
 		await settle(until: { client.started.count == 2 })
 
-		#expect(viewModel.confirmTarget == nil)
+		#expect(viewModel.confirmation == nil)
 		#expect(client.started.sorted() == ["api", "worker"])
 
 		client.finishStream()
@@ -1210,7 +1263,7 @@ struct StackViewModelTests {
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
 
-		let group = Task { await viewModel.perform(.stopStack) }
+		let group = Task { await viewModel.stopStack() }
 		await settle(until: { viewModel.isChangingStack })
 
 		// A process the group has not reached yet, so the refusal is the group action's
@@ -1241,7 +1294,7 @@ struct StackViewModelTests {
 		let single = Task { await viewModel.stopProcess("api") }
 		await settle(until: { viewModel.isBusy("api") })
 
-		await viewModel.perform(.stopStack)
+		await viewModel.stopStack()
 
 		#expect(client.stopped == ["api"])
 		#expect(viewModel.lastError == "Did not stop the stack, because what it could do changed")
@@ -1288,7 +1341,7 @@ struct StackViewModelTests {
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
 
-		await viewModel.perform(.stopProject("acme"))
+		await viewModel.stopProject("acme")
 
 		#expect(client.stopped.isEmpty)
 		#expect(viewModel.lastError == "Did not stop acme, because what it could do changed")
