@@ -40,6 +40,11 @@ public final class StackViewModel {
 
 	public private(set) var isChangingStack = false
 
+	/// Whether every process's project is known. The server answers for each process
+	/// separately, and one refusal leaves that process out of the grouping, where a
+	/// project action would pass over it without saying so.
+	public private(set) var isGroupingComplete = true
+
 	public var runningProcesses: [ProcessState] {
 		processes.filter(\.canStop)
 	}
@@ -165,6 +170,7 @@ public final class StackViewModel {
 		ResourceUsage.total(of: processes)
 	}
 
+	private var groupingError: String?
 	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
 	private var configurations: [String: ProcessConfiguration] = [:]
@@ -280,23 +286,39 @@ public final class StackViewModel {
 	/// Starts a single project's processes, leaving every other project alone. The
 	/// config's disabled processes stay off, as they do for the whole stack.
 	public func startProject(_ name: String) async {
+		guard canStartProject(name) else { return refuse("start", name) }
+
 		await applyToStack(startableProcesses(in: name).map(\.name), failureVerb: "start") {
 			try await self.client.start($0)
 		}
 	}
 
 	public func stopProject(_ name: String) async {
+		guard canStopProject(name) else { return refuse("stop", name) }
+
 		await applyToStack(stoppableProcesses(in: name).map(\.name), failureVerb: "stop") {
 			try await self.client.stop($0)
 		}
 	}
 
+	/// A menu is drawn before it is chosen and a dialog is answered after it is asked, so
+	/// a reconnect can retire what was offered. Saying nothing happened beats half doing it.
+	private func refuse(_ verb: String, _ name: String) {
+		lastError = "Did not \(verb) \(name): the stack changed since that was offered"
+	}
+
 	public func canStartProject(_ name: String) -> Bool {
-		connection == .connected && !isChangingStack && !startableProcesses(in: name).isEmpty
+		canActOnProjects && !startableProcesses(in: name).isEmpty
 	}
 
 	public func canStopProject(_ name: String) -> Bool {
-		connection == .connected && !isChangingStack && !stoppableProcesses(in: name).isEmpty
+		canActOnProjects && !stoppableProcesses(in: name).isEmpty
+	}
+
+	/// A project action reaches everything the grouping puts in that project, so it is
+	/// only offered while the grouping accounts for every process.
+	private var canActOnProjects: Bool {
+		connection == .connected && !isChangingStack && isGroupingComplete
 	}
 
 	private func processes(in project: String) -> [ProcessState] {
@@ -384,6 +406,7 @@ public final class StackViewModel {
 			projectsByProcess = loadedConfigurations.compactMapValues {
 				ProcessGrouping.project(forWorkingDir: $0.workingDir)
 			}
+			noteGrouping(for: snapshot, from: loadedConfigurations)
 			reconcileProject()
 			reconcileSelection()
 			connection = .connected
@@ -436,9 +459,48 @@ public final class StackViewModel {
 		self.selection = nil
 	}
 
+	/// `loadConfigurations` returns only what the server answered for, so anything missing
+	/// from it is a process whose project could not be worked out.
+	private func noteGrouping(
+		for snapshot: [ProcessState],
+		from loaded: [String: ProcessConfiguration]
+	) {
+		let unread = snapshot.map(\.name).filter { loaded[$0] == nil }.sorted()
+
+		isGroupingComplete = unread.isEmpty
+
+		guard !unread.isEmpty else {
+			// Only the message this put there is cleared, so a failure from anywhere else
+			// still stands, and so does one the user has already dismissed.
+			if lastError == groupingError { lastError = nil }
+			groupingError = nil
+			return
+		}
+
+		groupingError = "Could not read the configuration for \(unread.joined(separator: ", ")), so project actions stay off"
+		lastError = groupingError
+	}
+
 	// A process's configuration is fixed for the life of the project, so this runs
 	// once per connection rather than per state event.
 	private func loadConfigurations(for names: [String]) async -> [String: ProcessConfiguration] {
+		var loaded = await readConfigurations(for: names)
+
+		// Each configuration is a request of its own, so a single blip would otherwise keep
+		// a process out of the grouping for the whole connection, with no second chance
+		// until something else forces a reconnect.
+		let unread = names.filter { loaded[$0] == nil }
+
+		guard !unread.isEmpty else { return loaded }
+
+		for (name, configuration) in await readConfigurations(for: unread) {
+			loaded[name] = configuration
+		}
+
+		return loaded
+	}
+
+	private func readConfigurations(for names: [String]) async -> [String: ProcessConfiguration] {
 		await withTaskGroup(of: (String, ProcessConfiguration?).self) { group in
 			for name in names {
 				group.addTask { [client] in

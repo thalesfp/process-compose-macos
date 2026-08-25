@@ -3,6 +3,17 @@ import Testing
 
 @testable import ProcessComposeCore
 
+/// Waits for the connection the observation opens, so a test can assert on state that
+/// only holds while the stream is live.
+@MainActor
+private func settle(_ viewModel: StackViewModel) async {
+	let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+
+	while viewModel.connection != .connected, ContinuousClock.now < deadline {
+		try? await Task.sleep(for: .milliseconds(10))
+	}
+}
+
 @MainActor
 struct StackViewModelTests {
 	@Test("stops reporting a project once its server is gone")
@@ -400,12 +411,16 @@ struct StackViewModelTests {
 		])
 		client.workingDirs = ["api": "acme/api", "chatbot": "acme-ai-chatbot"]
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.stop(.project("acme"))
 
 		#expect(client.stopped == ["api"])
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("starts only the processes of the project it was given, leaving disabled ones off")
@@ -417,12 +432,125 @@ struct StackViewModelTests {
 		])
 		client.workingDirs = ["api": "acme/api", "seed": "acme/api", "chatbot": "acme-ai-chatbot"]
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.startProject("acme")
 
 		#expect(client.started == ["api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withholds project actions while a process's project is unknown")
+	func withholdsProjectActionsWhenGroupingIsIncomplete() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(!viewModel.isGroupingComplete)
+		#expect(!viewModel.canStopProject("acme"))
+		#expect(!viewModel.canStartProject("acme"))
+		#expect(viewModel.lastError == "Could not read the configuration for worker, so project actions stay off")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("recovers the grouping when a configuration fails once and then answers")
+	func recoversGroupingAfterATransientConfigurationFailure() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurationsOnce = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(viewModel.isGroupingComplete)
+		#expect(viewModel.canStopProject("acme"))
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops saying the grouping is short once every configuration answers")
+	func clearsTheGroupingErrorOnRecovery() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let first = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.lastError != nil)
+		client.finishStream()
+		await first.value
+
+		client.refusingConfigurations = []
+		await viewModel.observe()
+
+		#expect(viewModel.isGroupingComplete)
+		#expect(viewModel.lastError == nil)
+	}
+
+	@Test("stops nothing in a project it cannot account for, even when asked directly")
+	func refusesAProjectStopWhileGroupingIsIncomplete() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stop(.project("acme"))
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "Did not stop acme: the stack changed since that was offered")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("offers project actions once every process is accounted for")
+	func offersProjectActionsWhenGroupingIsComplete() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(viewModel.isGroupingComplete)
+		#expect(viewModel.canStopProject("acme"))
+		#expect(viewModel.canStartProject("acme"))
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("offers no project actions once the server is gone")
@@ -572,8 +700,25 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 
 	func processes() async throws -> [ProcessState] { try loadResult.get() }
 
+	nonisolated(unsafe) var refusingConfigurations: Set<String> = []
+	/// Names whose first configuration request fails and whose second succeeds.
+	nonisolated(unsafe) var refusingConfigurationsOnce: Set<String> = []
+
+	private let configurationLock = NSLock()
+	nonisolated(unsafe) private var refusedOnce: Set<String> = []
+
 	func configuration(for name: String) async throws -> ProcessConfiguration {
-		ProcessConfiguration(workingDir: workingDirs[name])
+		guard !refusingConfigurations.contains(name) else {
+			throw ProcessComposeError.unreachable(port: 28080)
+		}
+
+		let refusingNow = configurationLock.withLock {
+			refusingConfigurationsOnce.contains(name) && refusedOnce.insert(name).inserted
+		}
+
+		guard !refusingNow else { throw ProcessComposeError.unreachable(port: 28080) }
+
+		return ProcessConfiguration(workingDir: workingDirs[name])
 	}
 
 	/// Lets a test hold a connection inside its setup phase.
