@@ -12,6 +12,13 @@ public enum SplitLayout {
 		min(max(fraction + delta, fractionRange.lowerBound), fractionRange.upperBound)
 	}
 
+	/// Whether a step would move the divider at all. A drag is bounded in points rather
+	/// than by `fractionRange`, so a stored fraction can sit outside it, and a step back
+	/// towards the range moves even from an end the range calls the limit.
+	public static func canStep(_ fraction: Double, by delta: Double) -> Bool {
+		stepped(fraction, by: delta) != fraction
+	}
+
 	public static func topHeight(
 		fraction: Double,
 		total: Double,

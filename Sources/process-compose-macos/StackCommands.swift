@@ -40,11 +40,11 @@ struct StackCommands: Commands {
 
 			Button("Taller Log Pane") { splitFraction = SplitLayout.stepped(splitFraction, by: -SplitLayout.step) }
 				.keyboardShortcut(.downArrow, modifiers: [.command, .control])
-				.disabled(splitFraction <= SplitLayout.fractionRange.lowerBound)
+				.disabled(!SplitLayout.canStep(splitFraction, by: -SplitLayout.step))
 
 			Button("Shorter Log Pane") { splitFraction = SplitLayout.stepped(splitFraction, by: SplitLayout.step) }
 				.keyboardShortcut(.upArrow, modifiers: [.command, .control])
-				.disabled(splitFraction >= SplitLayout.fractionRange.upperBound)
+				.disabled(!SplitLayout.canStep(splitFraction, by: SplitLayout.step))
 
 			Button("Reset Split") { splitFraction = PreferenceDefault.splitFraction }
 				.keyboardShortcut(KeyEquivalent("0"), modifiers: [.command, .control])
