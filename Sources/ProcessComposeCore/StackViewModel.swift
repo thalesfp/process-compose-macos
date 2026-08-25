@@ -171,6 +171,7 @@ public final class StackViewModel {
 	}
 
 	private var groupingError: String?
+	private var adopting: Set<String> = []
 	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
 	private var configurations: [String: ProcessConfiguration] = [:]
@@ -406,14 +407,27 @@ public final class StackViewModel {
 			projectsByProcess = loadedConfigurations.compactMapValues {
 				ProcessGrouping.project(forWorkingDir: $0.workingDir)
 			}
-			noteGrouping(for: snapshot, from: loadedConfigurations)
+			recomputeGrouping()
 			reconcileProject()
 			reconcileSelection()
 			connection = .connected
 
 			for try await event in client.stateEvents() {
 				guard isCurrent(mine) else { return }
-				statesByName[event.state.name] = event.state
+
+				let name = event.state.name
+				statesByName[name] = event.state
+
+				// Keyed on the missing configuration rather than on the process being new, so
+				// a read that failed is tried again the next time the process is heard from.
+				guard configurations[name] == nil, !adopting.contains(name) else { continue }
+
+				adopting.insert(name)
+				recomputeGrouping()
+
+				// The read is left to run on its own: a configuration request that hangs must
+				// not hold up the state changes queued behind it on the stream.
+				Task { [weak self] in await self?.adopt(name, observation: mine) }
 			}
 
 			guard isCurrent(mine) else { return }
@@ -459,13 +473,10 @@ public final class StackViewModel {
 		self.selection = nil
 	}
 
-	/// `loadConfigurations` returns only what the server answered for, so anything missing
-	/// from it is a process whose project could not be worked out.
-	private func noteGrouping(
-		for snapshot: [ProcessState],
-		from loaded: [String: ProcessConfiguration]
-	) {
-		let unread = snapshot.map(\.name).filter { loaded[$0] == nil }.sorted()
+	/// A process belongs to a project only once its configuration has been read, so the
+	/// grouping is complete when every process the app knows about has one.
+	private func recomputeGrouping() {
+		let unread = statesByName.keys.filter { configurations[$0] == nil }.sorted()
 
 		isGroupingComplete = unread.isEmpty
 
@@ -479,6 +490,29 @@ public final class StackViewModel {
 
 		groupingError = "Could not read the configuration for \(unread.joined(separator: ", ")), so project actions stay off"
 		lastError = groupingError
+	}
+
+	/// The stream can introduce a process the connection never read a configuration for,
+	/// which leaves it in no project. Project actions are withheld from the moment it
+	/// appears until it has been placed.
+	private func adopt(_ name: String, observation mine: Int) async {
+		let loaded = await loadConfigurations(for: [name])
+
+		adopting.remove(name)
+
+		guard isCurrent(mine) else { return }
+
+		if let configuration = loaded[name] {
+			configurations[name] = configuration
+			projectsByProcess[name] = ProcessGrouping.project(forWorkingDir: configuration.workingDir)
+		}
+
+		recomputeGrouping()
+
+		// A process arriving can be the first of its project, and the sidebar settles the
+		// same way here as it does for the processes the connection started with.
+		reconcileProject()
+		reconcileSelection()
 	}
 
 	// A process's configuration is fixed for the life of the project, so this runs
