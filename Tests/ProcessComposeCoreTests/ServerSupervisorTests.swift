@@ -57,6 +57,22 @@ struct ServerSupervisorTests {
 		#expect(supervisor.state != .running(owned: true))
 	}
 
+	@Test("keeps its identity when a second window asks for the same server")
+	func keepsIdentityForTheSameServer() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let first = supervisor.identity
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.identity == first)
+	}
+
 	@Test("takes back the server an earlier run left behind")
 	func adoptsRecordedServer() async {
 		let runner = FakeRunner()

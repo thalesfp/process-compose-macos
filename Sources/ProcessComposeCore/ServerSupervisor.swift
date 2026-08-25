@@ -146,7 +146,9 @@ public final class ServerSupervisor {
 		}
 
 		generation += 1
-		identity += 1
+		// Being asked again for the server it is already pointed at is another window, not
+		// another server, and nothing that was agreed to for this one is stale.
+		if useInputs != wanted { identity += 1 }
 		let mine = generation
 		useToken += 1
 		let token = useToken

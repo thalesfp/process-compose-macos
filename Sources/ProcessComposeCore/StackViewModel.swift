@@ -195,6 +195,8 @@ public final class StackViewModel {
 	}
 
 	private var groupingError: String?
+	private var actionEpoch = 0
+	private var connectedAddress: ServerAddress?
 	/// What the open question said would be left stopped, so consent can be checked against
 	/// what the server says when the answer finally comes back.
 	private var confirmedDependencies: [String] = []
@@ -251,15 +253,30 @@ public final class StackViewModel {
 		connection = .disconnected(reason: reason)
 	}
 
-	/// Points the view model at a different server and starts over.
-	public func use(_ client: any ProcessComposeClient) {
+	/// Points the view model at a different server and starts over. Being handed a client
+	/// for the address it is already on is another window, not another server, so it keeps
+	/// what is open and what is under way.
+	public func use(_ client: any ProcessComposeClient, at address: ServerAddress? = nil) {
+		if let address, address == connectedAddress { return }
+
+		connectedAddress = address
 		generation += 1
 		self.client = client
+		abandonActions()
 		connection = .connecting
 		statesByName = [:]
 		project = nil
 		lastError = nil
 		connect()
+	}
+
+	/// Drops what was agreed to and what is already under way. A question was asked about
+	/// the stack that was on screen, and a different server answers for a different one,
+	/// even when it is reached at the same address.
+	public func abandonActions() {
+		actionEpoch += 1
+		confirmTarget = nil
+		confirmedDependencies = []
 	}
 
 	public func isBusy(_ name: String?) -> Bool {
@@ -487,11 +504,13 @@ public final class StackViewModel {
 	) async {
 		let client = self.client
 		let mine = generation
+		let epoch = actionEpoch
 
 		isChangingStack = true
 		defer { isChangingStack = false }
 
 		guard await refreshConfigurations(for: members, from: client, observation: mine) else { return }
+		guard epoch == actionEpoch else { return }
 
 		// What was true when the action was offered is checked again against what the
 		// server just said, not against the cache the decision was taken from.
@@ -517,7 +536,7 @@ public final class StackViewModel {
 		var skipped: [String] = []
 
 		for name in names {
-			guard mine == generation else { return }
+			guard mine == generation, epoch == actionEpoch else { return }
 
 			// Ordering only holds while everything before it worked: a process whose
 			// prerequisite never started would come up without it.

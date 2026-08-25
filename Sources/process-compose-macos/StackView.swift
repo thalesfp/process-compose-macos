@@ -64,9 +64,9 @@ struct StackView: View {
 				.map { suggestedConfig = $0 }
 		}
 		.onChange(of: server.identity) {
-			// A stop the user agreed to was agreed for the server that was there when they
-			// were asked, so pointing the app at another one withdraws the question.
-			if case .stopServer = model.confirmTarget { model.confirmTarget = nil }
+			// Whatever was agreed to was agreed for the server that was there when the
+			// question was asked, and a restart at the same address is another server.
+			model.abandonActions()
 		}
 		.onChange(of: model.connection) { _, connection in
 			guard case .disconnected = connection else { return }
@@ -482,7 +482,7 @@ struct StackView: View {
 		}
 
 		let client = LiveProcessComposeClient(address: address)
-		model.use(client)
+		model.use(client, at: address)
 		logModel.use(client)
 	}
 }

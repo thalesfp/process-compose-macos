@@ -963,6 +963,76 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("withdraws an open question when the app is pointed at another server")
+	func withdrawsAQuestionOnAnotherServer() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.confirmTarget = .stopProject("acme")
+
+		viewModel.use(StubClient(processes: []))
+
+		#expect(viewModel.confirmTarget == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("sends nothing more once the work under way is abandoned")
+	func abandonsWorkAlreadyUnderWay() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		// The action is held in its preflight read, as it would be while the server behind
+		// the same address is replaced.
+		client.hold(["api", "worker"])
+		let bulk = Task { await viewModel.stopProject("acme") }
+		await settle(until: { viewModel.isChangingStack })
+
+		viewModel.abandonActions()
+		client.hold([])
+		await bulk.value
+
+		#expect(client.stopped.isEmpty)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("keeps an open question when another window asks for the same server")
+	func keepsAQuestionForTheSameServer() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.use(client, at: .standard)
+		viewModel.confirmTarget = .stopProject("acme")
+
+		// A second window builds its own client for the very same address.
+		viewModel.use(StubClient(processes: []), at: .standard)
+
+		#expect(viewModel.confirmTarget == .stopProject("acme"))
+
+		client.finishStream()
+		await session.value
+	}
+
 	@Test("does not ask when the dependency it needs is already up")
 	func doesNotAskAboutADependencyAlreadyRunning() async {
 		let client = StubClient(processes: [
