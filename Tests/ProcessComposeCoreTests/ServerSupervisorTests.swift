@@ -258,7 +258,7 @@ struct ServerSupervisorTests {
 		)
 
 		let first = Task { await supervisor.use(address: .standard, plan: .test) }
-		await until { probe.didStart }
+		await settle(until: { probe.didStart })
 
 		// The settings move on while the first request is still looking at the port.
 		probe.answerNow()
@@ -844,7 +844,7 @@ struct ServerSupervisorTests {
 
 		// Two windows asking for the same thing; the second goes away mid-probe.
 		let first = Task { await supervisor.use(address: .standard, plan: .test) }
-		await until { probe.didStart }
+		await settle(until: { probe.didStart })
 		let second = Task { await supervisor.use(address: .standard, plan: .test) }
 		second.cancel()
 
@@ -867,7 +867,7 @@ struct ServerSupervisorTests {
 		)
 
 		let first = Task { await supervisor.use(address: .standard, plan: .test) }
-		await until { probe.didStart }
+		await settle(until: { probe.didStart })
 
 		let other = ServerAddress(host: "localhost", port: 28081)!
 		let second = Task { await supervisor.use(address: other, plan: .test) }
@@ -916,7 +916,7 @@ struct ServerSupervisorTests {
 		runner.started?.exitStatus = -1
 
 		await supervisor.stop()
-		await until { supervisor.state == .idle }
+		await settle(until: { supervisor.state == .idle })
 
 		#expect(supervisor.state == .idle)
 	}
@@ -957,17 +957,9 @@ struct ServerSupervisorTests {
 
 		await supervisor.use(address: .standard, plan: .test)
 		runner.started?.emit("chatbot is running")
-		await until { supervisor.log.lines.count == 1 }
+		await settle(until: { supervisor.log.lines.count == 1 })
 
 		#expect(supervisor.log.lines.first?.text == "chatbot is running")
-	}
-}
-
-/// Spins the main actor until the watch task has caught up.
-@MainActor
-private func until(_ condition: () -> Bool, attempts: Int = 1000) async {
-	for _ in 0 ..< attempts where !condition() {
-		await Task.yield()
 	}
 }
 

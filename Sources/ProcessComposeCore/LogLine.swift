@@ -20,14 +20,23 @@ public struct LogMessage: Decodable, Sendable, Hashable {
 public struct LogLine: Sendable, Hashable, Identifiable {
 	public let id: Int
 	public let spans: [AnsiSpan]
+	/// Joined once here rather than per read: a filter walks the whole buffer on every
+	/// pane redraw, and a redraw follows each arriving line.
+	public let text: String
 
 	public init(id: Int, spans: [AnsiSpan]) {
 		self.id = id
 		self.spans = spans
+		self.text = spans.map(\.text).joined()
 	}
 
-	public var text: String {
-		spans.map(\.text).joined()
+	public static func == (lhs: LogLine, rhs: LogLine) -> Bool {
+		lhs.id == rhs.id && lhs.spans == rhs.spans
+	}
+
+	public func hash(into hasher: inout Hasher) {
+		hasher.combine(id)
+		hasher.combine(spans)
 	}
 }
 

@@ -58,7 +58,7 @@ public final class StackViewModel {
 	/// Whether every process's project is known. The server answers for each process
 	/// separately, and one refusal leaves that process out of the grouping, where a
 	/// project action would pass over it without saying so.
-	public private(set) var isGroupingComplete = true
+	public var isGroupingComplete: Bool { groupingError == nil }
 
 	public var runningProcesses: [ProcessState] {
 		processes.filter(\.canStop)
@@ -330,9 +330,7 @@ public final class StackViewModel {
 		guard canChangePower else { return refuse("start", "the stack") }
 
 		await applyToStack(
-			touching: processes.map(\.name),
 			stopping: false,
-			failureVerb: "start",
 			select: { self.startableProcesses.map(\.name) }
 		) { client, name in
 			try await client.start(name)
@@ -343,9 +341,7 @@ public final class StackViewModel {
 		guard canChangePower else { return refuse("stop", "the stack") }
 
 		await applyToStack(
-			touching: processes.map(\.name),
 			stopping: true,
-			failureVerb: "stop",
 			validate: {
 				guard let promised else { return nil }
 
@@ -420,9 +416,7 @@ public final class StackViewModel {
 		guard canStartProject(name) else { return refuse("start", name) }
 
 		await applyToStack(
-			touching: processes.map(\.name),
 			stopping: false,
-			failureVerb: "start",
 			validate: {
 				let missing = self.missingDependencies(startingProject: name)
 
@@ -453,9 +447,7 @@ public final class StackViewModel {
 		guard canStopProject(name) else { return refuse("stop", name) }
 
 		await applyToStack(
-			touching: processes.map(\.name),
 			stopping: true,
-			failureVerb: "stop",
 			validate: {
 				guard let promised else { return nil }
 
@@ -477,17 +469,17 @@ public final class StackViewModel {
 	}
 
 	public func canStartProject(_ name: String) -> Bool {
-		canAct(on: name) && !startableProcesses(in: name).isEmpty
+		canActOnProjects && !startableProcesses(in: name).isEmpty
 	}
 
 	public func canStopProject(_ name: String) -> Bool {
-		canAct(on: name) && !stoppableProcesses(in: name).isEmpty
+		canActOnProjects && !stoppableProcesses(in: name).isEmpty
 	}
 
 	/// A project action reaches everything the grouping puts in that project, and a start
 	/// reaches whatever those depend on as well, so it is only offered while the grouping
 	/// accounts for every process and nothing anywhere is carrying a request of its own.
-	private func canAct(on project: String) -> Bool {
+	private var canActOnProjects: Bool {
 		connection == .connected && !isChangingStack && isGroupingComplete && busy.isEmpty
 	}
 
@@ -524,16 +516,14 @@ public final class StackViewModel {
 		return ordered
 	}
 
-	// One process at a time, in the order given: the server starts only the process it is
-	// asked for, so firing the whole list at once would race their dependencies.
 	/// One bulk action from end to end. It takes the floor before it does anything that
 	/// waits, so nothing else can slip in behind an await; it re-reads what it is about to
 	/// touch from the server it started on; and it sends the requests in dependency order,
 	/// passing over anything whose prerequisite failed.
+	private static let stackMovedUnderTheRead = "The stack changed while it was being read, so nothing was changed"
+
 	private func applyToStack(
-		touching members: [String],
 		stopping: Bool,
-		failureVerb: String,
 		validate: () -> String? = { nil },
 		select: () -> [String],
 		_ operation: (any ProcessComposeClient, String) async throws -> Void
@@ -541,6 +531,8 @@ public final class StackViewModel {
 		let client = self.client
 		let mine = generation
 		let epoch = actionEpoch
+		let members = processes.map(\.name)
+		let failureVerb = stopping ? "stop" : "start"
 
 		isChangingStack = true
 		defer { isChangingStack = false }
@@ -553,7 +545,7 @@ public final class StackViewModel {
 		guard isGroupingComplete else {
 			// Not the grouping message: that one is cleared the moment the newcomer is
 			// placed, and the user would be left with no sign the action was refused.
-			lastError = "The stack changed while it was being read, so nothing was changed"
+			lastError = Self.stackMovedUnderTheRead
 			return
 		}
 
@@ -565,29 +557,30 @@ public final class StackViewModel {
 		}
 
 		let ordered = inDependencyOrder(select())
-		let names = stopping ? ordered.reversed().map { $0 } : ordered
+		let names = stopping ? Array(ordered.reversed()) : ordered
 
 		guard !names.isEmpty else { return }
 
 		// `select` runs after the read, and the stream can bring a process in meanwhile.
 		// Anything that was not read has no dependency data this action can stand on.
 		guard Set(names).isSubset(of: Set(members)) else {
-			lastError = "The stack changed while it was being read, so nothing was changed"
+			lastError = Self.stackMovedUnderTheRead
 			return
 		}
 
 		let blockedBy = blockers(among: names, stopping: stopping)
 		var failures: [String] = []
 		var skipped: [String] = []
+		var stalled: Set<String> = []
 
 		for name in names {
 			guard mine == generation, epoch == actionEpoch else { return }
 
 			// Ordering only holds while everything before it worked: a process whose
 			// prerequisite never started would come up without it.
-			if let blockers = blockedBy[name],
-				!blockers.isDisjoint(with: Set(failures).union(skipped)) {
+			if let blockers = blockedBy[name], !blockers.isDisjoint(with: stalled) {
 				skipped.append(name)
+				stalled.insert(name)
 				continue
 			}
 
@@ -596,6 +589,7 @@ public final class StackViewModel {
 				try await operation(client, name)
 			} catch {
 				failures.append(name)
+				stalled.insert(name)
 			}
 			busy.remove(name)
 		}
@@ -635,18 +629,7 @@ public final class StackViewModel {
 			return false
 		}
 
-		for (name, configuration) in loaded {
-			configurations[name] = configuration
-			projectsByProcess[name] = ProcessGrouping.project(forWorkingDir: configuration.workingDir)
-		}
-
-		recomputeGrouping()
-
-		// The re-read can move a process to another project, so the sidebar and the row
-		// selection settle here the same way they do for the processes a connection starts
-		// with and for one the stream brings in.
-		reconcileProject()
-		reconcileSelection()
+		place(loaded)
 
 		return true
 	}
@@ -785,12 +768,25 @@ public final class StackViewModel {
 		self.selection = nil
 	}
 
+	/// Puts each read configuration into its project, then settles what that moved: the
+	/// grouping, the sidebar's project, and the selected row. A re-read can move a process
+	/// between projects and an arriving one can be the first of its own, so both callers
+	/// need all three.
+	private func place(_ loaded: [String: ProcessConfiguration]) {
+		for (name, configuration) in loaded {
+			configurations[name] = configuration
+			projectsByProcess[name] = ProcessGrouping.project(forWorkingDir: configuration.workingDir)
+		}
+
+		recomputeGrouping()
+		reconcileProject()
+		reconcileSelection()
+	}
+
 	/// A process belongs to a project only once its configuration has been read, so the
 	/// grouping is complete when every process the app knows about has one.
 	private func recomputeGrouping() {
 		let unread = statesByName.keys.filter { configurations[$0] == nil }.sorted()
-
-		isGroupingComplete = unread.isEmpty
 
 		guard !unread.isEmpty else {
 			// Only the message this put there is cleared, so a failure from anywhere else
@@ -814,17 +810,7 @@ public final class StackViewModel {
 
 		guard isCurrent(mine) else { return }
 
-		if let configuration = loaded[name] {
-			configurations[name] = configuration
-			projectsByProcess[name] = ProcessGrouping.project(forWorkingDir: configuration.workingDir)
-		}
-
-		recomputeGrouping()
-
-		// A process arriving can be the first of its project, and the sidebar settles the
-		// same way here as it does for the processes the connection started with.
-		reconcileProject()
-		reconcileSelection()
+		place(loaded)
 	}
 
 	// A process's configuration is fixed for the life of the project, so this runs

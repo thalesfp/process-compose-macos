@@ -3,27 +3,6 @@ import Testing
 
 @testable import ProcessComposeCore
 
-/// Waits for the connection the observation opens, so a test can assert on state that
-/// only holds while the stream is live.
-@MainActor
-private func settle(_ viewModel: StackViewModel) async {
-	let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-
-	while viewModel.connection != .connected, ContinuousClock.now < deadline {
-		try? await Task.sleep(for: .milliseconds(10))
-	}
-}
-
-/// Waits for something the stream drives, so a test never races the observation.
-@MainActor
-private func settle(until condition: () -> Bool) async {
-	let deadline = ContinuousClock.now.advanced(by: .seconds(5))
-
-	while !condition(), ContinuousClock.now < deadline {
-		try? await Task.sleep(for: .milliseconds(10))
-	}
-}
-
 @MainActor
 struct StackViewModelTests {
 	@Test("stops reporting a project once its server is gone")
