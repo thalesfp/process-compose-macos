@@ -12,6 +12,7 @@ struct StackCommands: Commands {
 	@Binding var logFontSize: Double
 
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
+	@AppStorage(PreferenceKey.splitFraction) private var splitFraction = PreferenceDefault.splitFraction
 
 	var body: some Commands {
 		CommandGroup(replacing: .newItem) {}
@@ -33,6 +34,20 @@ struct StackCommands: Commands {
 			Button("Actual Size") { logFontSize = LogFont.standard }
 				.keyboardShortcut(KeyEquivalent("0"), modifiers: .command)
 				.disabled(logFontSize == LogFont.standard)
+
+			Divider()
+
+			Button("Taller Log Pane") { splitFraction = SplitLayout.stepped(splitFraction, by: -SplitLayout.step) }
+				.keyboardShortcut(.downArrow, modifiers: [.command, .control])
+				.disabled(splitFraction <= SplitLayout.fractionRange.lowerBound)
+
+			Button("Shorter Log Pane") { splitFraction = SplitLayout.stepped(splitFraction, by: SplitLayout.step) }
+				.keyboardShortcut(.upArrow, modifiers: [.command, .control])
+				.disabled(splitFraction >= SplitLayout.fractionRange.upperBound)
+
+			Button("Reset Split") { splitFraction = PreferenceDefault.splitFraction }
+				.keyboardShortcut(KeyEquivalent("0"), modifiers: [.command, .control])
+				.disabled(splitFraction == PreferenceDefault.splitFraction)
 
 			Divider()
 		}

@@ -56,4 +56,17 @@ struct SplitLayoutTests {
 
 		#expect(fraction == 0.18)
 	}
+
+	@Test("moves the divider the way the menu item names")
+	func stepsInBothDirections() {
+		#expect(SplitLayout.stepped(0.6, by: SplitLayout.step) > 0.6)
+		#expect(SplitLayout.stepped(0.6, by: -SplitLayout.step) < 0.6)
+	}
+
+	@Test("stops the divider at its range rather than drifting past it")
+	func clampsSteppedFraction() {
+		#expect(SplitLayout.stepped(0.84, by: SplitLayout.step) == SplitLayout.fractionRange.upperBound)
+		#expect(SplitLayout.stepped(0.16, by: -SplitLayout.step) == SplitLayout.fractionRange.lowerBound)
+		#expect(SplitLayout.stepped(5, by: SplitLayout.step) == SplitLayout.fractionRange.upperBound)
+	}
 }

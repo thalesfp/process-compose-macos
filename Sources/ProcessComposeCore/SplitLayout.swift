@@ -2,6 +2,16 @@ import Foundation
 
 /// Where the draggable divider sits between two stacked panes.
 public enum SplitLayout {
+	/// How far one View menu step moves the divider, and how far it may be moved. The
+	/// menu cannot see the window height, so the bound is on the fraction rather than
+	/// on points; `topHeight` still holds each pane to its own minimum when it draws.
+	public static let step = 0.05
+	public static let fractionRange: ClosedRange<Double> = 0.15 ... 0.85
+
+	public static func stepped(_ fraction: Double, by delta: Double) -> Double {
+		min(max(fraction + delta, fractionRange.lowerBound), fractionRange.upperBound)
+	}
+
 	public static func topHeight(
 		fraction: Double,
 		total: Double,
