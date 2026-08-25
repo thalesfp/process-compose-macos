@@ -7,12 +7,19 @@ public enum StackPower: Sendable, Equatable {
 	case unavailable
 }
 
-/// What a stop is being asked about. The whole stack and a single project confirm
-/// through the same question, so only one can ever be in flight.
-public enum StopTarget: Sendable, Equatable {
-	case everything
-	case project(String)
-	case server
+/// What the window is asking the user to confirm. Every question goes through one
+/// target, so only one can ever be in flight.
+public enum ConfirmTarget: Sendable, Equatable {
+	case stopStack
+	case stopProject(String)
+	case stopServer
+	case startProject(String)
+
+	/// Starting is the only one of these that does not take something away.
+	public var isDestructive: Bool {
+		if case .startProject = self { return false }
+		return true
+	}
 }
 
 public enum ConnectionState: Sendable, Equatable {
@@ -34,9 +41,9 @@ public final class StackViewModel {
 	/// The project the sidebar has selected.
 	public private(set) var selectedProject: String?
 
-	/// What the window is asking the user to confirm stopping, if anything. Owned here
-	/// because the toolbar button, the menu bar and the sidebar all raise it.
-	public var stopTarget: StopTarget?
+	/// What the window is asking the user to confirm, if anything. Owned here because the
+	/// toolbar button, the menu bar and the sidebar all raise it.
+	public var confirmTarget: ConfirmTarget?
 
 	public private(set) var isChangingStack = false
 
@@ -59,35 +66,47 @@ public final class StackViewModel {
 		return startableProcesses.isEmpty ? .unavailable : .canStart
 	}
 
-	/// Whether the server can act on the power button right now.
+	/// Whether the server can act on the power button right now. A group action and a
+	/// single process's own action never overlap, in either direction, so neither can
+	/// send a second request for a process the other is already asking about.
 	public var canChangePower: Bool {
-		connection == .connected && !isChangingStack && power != .unavailable
+		connection == .connected && !isChangingStack && busy.isEmpty && power != .unavailable
 	}
 
 	/// The power button reaches the whole stack while the window shows one project, so
 	/// the confirmation says how far the stop goes.
-	public func stopQuestion(for target: StopTarget) -> String {
+	public func question(for target: ConfirmTarget) -> String {
 		switch target {
-		case .everything:
+		case .stopStack:
 			let projectCount = projects.filter { $0.runningCount > 0 }.count
 			let label = Self.runningLabel(runningProcesses.count)
 
 			return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
-		case .project(let name):
+		case .stopProject(let name):
 			return "Stop \(Self.runningLabel(stoppableProcesses(in: name).count)) in \(name)?"
-		case .server:
-			// Stopping the server takes every process with it, whichever project is showing.
+		case .stopServer:
+			// The server can be ours to stop while the app has no list of what it is
+			// running, and a question that then said nothing was running would understate it.
+			guard connection == .connected else {
+				return "Stop the server and every process it is running?"
+			}
+
 			let count = runningProcesses.count
 
 			return count == 0 ? "Stop the server?" : "Stop the server and \(Self.runningLabel(count))?"
+		case .startProject(let name):
+			let others = projectsReached(startingBeyond: name)
+
+			return "Starting \(name) also starts what it depends on in \(others.joined(separator: ", "))?"
 		}
 	}
 
-	public func stopConfirmation(for target: StopTarget) -> String {
+	public func confirmation(for target: ConfirmTarget) -> String {
 		switch target {
-		case .everything: "Stop the stack"
-		case .project(let name): "Stop \(name)"
-		case .server: "Stop the server"
+		case .stopStack: "Stop the stack"
+		case .stopProject(let name): "Stop \(name)"
+		case .stopServer: "Stop the server"
+		case .startProject(let name): "Start \(name)"
 		}
 	}
 
@@ -97,8 +116,10 @@ public final class StackViewModel {
 
 	/// Stopping asks first because it is destructive; starting does not.
 	public func togglePower() {
+		guard canChangePower else { return }
+
 		switch power {
-		case .canStop: stopTarget = .everything
+		case .canStop: confirmTarget = .stopStack
 		case .canStart: Task { await startStack() }
 		case .unavailable: break
 		}
@@ -241,47 +262,97 @@ public final class StackViewModel {
 
 	public func canStart(_ name: String?) -> Bool {
 		guard let name, let state = statesByName[name] else { return false }
-		return state.canStart && !busy.contains(name)
+		return state.canStart && !busy.contains(name) && !isChangingStack
 	}
 
 	public func canStop(_ name: String?) -> Bool {
 		guard let name, let state = statesByName[name] else { return false }
-		return state.canStop && !busy.contains(name)
+		return state.canStop && !busy.contains(name) && !isChangingStack
 	}
 
 	public func startProcess(_ name: String) async {
+		guard canStart(name) else { return refuse("start", name) }
+
 		await act(on: name) { try await self.client.start(name) }
 	}
 
 	public func stopProcess(_ name: String) async {
+		guard canStop(name) else { return refuse("stop", name) }
+
 		await act(on: name) { try await self.client.stop(name) }
 	}
 
 	public func restartProcess(_ name: String) async {
+		guard canStop(name) else { return refuse("restart", name) }
+
 		await act(on: name) { try await self.client.restart(name) }
 	}
 
 	/// Starts every process the stack defines. Processes the config disabled stay off,
 	/// because switching one of those on is a per-process decision made on its row.
 	public func startStack() async {
+		guard canChangePower else { return refuse("start", "the stack") }
+
 		await applyToStack(startableProcesses.map(\.name), failureVerb: "start") {
 			try await self.client.start($0)
 		}
 	}
 
 	public func stopStack() async {
+		guard canChangePower else { return refuse("stop", "the stack") }
+
 		await applyToStack(runningProcesses.map(\.name), failureVerb: "stop") {
 			try await self.client.stop($0)
 		}
 	}
 
-	/// The server is not this model's to stop, so `.server` is the window's to dispatch.
-	public func stop(_ target: StopTarget) async {
+	/// The server is not this model's to stop, so `.stopServer` is the window's to dispatch.
+	public func perform(_ target: ConfirmTarget) async {
 		switch target {
-		case .everything: await stopStack()
-		case .project(let name): await stopProject(name)
-		case .server: break
+		case .stopStack: await stopStack()
+		case .stopProject(let name): await stopProject(name)
+		case .startProject(let name): await startProject(name)
+		case .stopServer: break
 		}
+	}
+
+	/// Starting asks first only when it would reach past the project asked for, since
+	/// process-compose starts what a process depends on before starting it.
+	public func requestStartProject(_ name: String) {
+		guard canStartProject(name) else { return refuse("start", name) }
+
+		guard projectsReached(startingBeyond: name).isEmpty else {
+			confirmTarget = .startProject(name)
+			return
+		}
+
+		Task { await startProject(name) }
+	}
+
+	/// The projects other than this one that starting it would reach.
+	public func projectsReached(startingBeyond project: String) -> [String] {
+		let reached = closure(of: startableProcesses(in: project).map(\.name))
+		// Something already up is not started again, so it does not widen the reach.
+		let others = reached
+			.filter { statesByName[$0]?.isStartable ?? false }
+			.map { projectsByProcess[$0] ?? ProcessGrouping.ungrouped }
+
+		return Set(others.filter { $0 != project }).sorted()
+	}
+
+	/// Everything a start would touch: the processes asked for, and whatever they depend
+	/// on, all the way down.
+	private func closure(of names: [String]) -> Set<String> {
+		var reached: Set<String> = []
+		var pending = names
+
+		while let name = pending.popLast() {
+			guard reached.insert(name).inserted else { continue }
+
+			pending.append(contentsOf: configurations[name]?.dependsOn ?? [])
+		}
+
+		return reached
 	}
 
 	/// Starts a single project's processes, leaving every other project alone. The
@@ -303,23 +374,25 @@ public final class StackViewModel {
 	}
 
 	/// A menu is drawn before it is chosen and a dialog is answered after it is asked, so
-	/// a reconnect can retire what was offered. Saying nothing happened beats half doing it.
-	private func refuse(_ verb: String, _ name: String) {
-		lastError = "Did not \(verb) \(name): the stack changed since that was offered"
+	/// a reconnect, or another action starting, can retire what was offered. Saying nothing
+	/// happened beats half doing it.
+	private func refuse(_ verb: String, _ subject: String) {
+		lastError = "Did not \(verb) \(subject), because what it could do changed"
 	}
 
 	public func canStartProject(_ name: String) -> Bool {
-		canActOnProjects && !startableProcesses(in: name).isEmpty
+		canAct(on: name) && !startableProcesses(in: name).isEmpty
 	}
 
 	public func canStopProject(_ name: String) -> Bool {
-		canActOnProjects && !stoppableProcesses(in: name).isEmpty
+		canAct(on: name) && !stoppableProcesses(in: name).isEmpty
 	}
 
-	/// A project action reaches everything the grouping puts in that project, so it is
-	/// only offered while the grouping accounts for every process.
-	private var canActOnProjects: Bool {
-		connection == .connected && !isChangingStack && isGroupingComplete
+	/// A project action reaches everything the grouping puts in that project, and a start
+	/// reaches whatever those depend on as well, so it is only offered while the grouping
+	/// accounts for every process and nothing anywhere is carrying a request of its own.
+	private func canAct(on project: String) -> Bool {
+		connection == .connected && !isChangingStack && isGroupingComplete && busy.isEmpty
 	}
 
 	private func processes(in project: String) -> [ProcessState] {

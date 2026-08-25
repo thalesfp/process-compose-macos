@@ -9,10 +9,10 @@ struct ProjectActions: View {
 	let project: String?
 
 	var body: some View {
-		Button(title("Start All")) { run(model.startProject) }
+		Button(title("Start All")) { project.map(model.requestStartProject) }
 			.disabled(!allows(model.canStartProject))
 
-		Button(title("Stop All") + "...") { project.map { model.stopTarget = .project($0) } }
+		Button(title("Stop All") + "...") { project.map { model.confirmTarget = .stopProject($0) } }
 			.disabled(!allows(model.canStopProject))
 	}
 
@@ -24,9 +24,4 @@ struct ProjectActions: View {
 		project.map(predicate) ?? false
 	}
 
-	private func run(_ action: @escaping (String) async -> Void) {
-		guard let project else { return }
-
-		Task { await action(project) }
-	}
 }

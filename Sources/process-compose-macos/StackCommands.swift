@@ -89,7 +89,7 @@ struct StackCommands: Commands {
 				.keyboardShortcut("r", modifiers: [.command, .option])
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { model.stopTarget = .server }
+			Button("Stop Server...") { model.confirmTarget = .stopServer }
 				.keyboardShortcut(".", modifiers: [.command, .option])
 				.disabled(!server.isOwned)
 
