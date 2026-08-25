@@ -7,6 +7,7 @@ struct StackView: View {
 	@Bindable var logModel: LogViewModel
 	let mcpModel: MCPServerViewModel
 	let server: ServerSupervisor
+	@Bindable var windowState: WindowState
 
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -23,9 +24,6 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.suggestedConfigPath) private var suggestedConfig = PreferenceDefault.suggestedConfigPath
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 
-	@State private var isShowingServerLog = false
-	@State private var isSettingUpServer = false
-
 	var body: some View {
 		NavigationSplitView(columnVisibility: columnVisibility) {
 			sidebar
@@ -33,8 +31,8 @@ struct StackView: View {
 			VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
 				content
 			} bottom: {
-				if isShowingServerLog {
-					ServerLogPane(log: server.log, status: serverStatus) { isShowingServerLog = false }
+				if windowState.isShowingServerLog {
+					ServerLogPane(log: server.log, status: serverStatus) { windowState.isShowingServerLog = false }
 				} else {
 					LogPane(model: logModel)
 				}
@@ -54,7 +52,7 @@ struct StackView: View {
 		.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
 		.onChange(of: model.selection) { _, name in
 			logModel.select(name)
-			if name != nil { isShowingServerLog = false }
+			if name != nil { windowState.isShowingServerLog = false }
 		}
 		.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
 		.onChange(of: model.project?.configFiles ?? []) { _, files in
@@ -69,13 +67,21 @@ struct StackView: View {
 		.task(id: ServerInputs(address: address, plan: launchPlan)) {
 			await server.use(address: address, plan: launchPlan)
 		}
-		.sheet(isPresented: $isSettingUpServer) { ServerSetupSheet() }
+		.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
 		.confirmationDialog(
 			model.stopStackQuestion,
 			isPresented: $model.isConfirmingStopStack
 		) {
 			Button("Stop the stack", role: .destructive) {
 				Task { await model.stopStack() }
+			}
+		}
+		.confirmationDialog(
+			model.stopServerQuestion,
+			isPresented: $windowState.isConfirmingStopServer
+		) {
+			Button("Stop the server", role: .destructive) {
+				Task { await server.stop() }
 			}
 		}
 	}
@@ -167,9 +173,6 @@ struct StackView: View {
 
 			Button("Copy MCP URL") { mcpModel.url.map { NSPasteboard.copy($0.absoluteString) } }
 				.disabled(mcpModel.url == nil)
-
-			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
-				.disabled(configURLs.isEmpty)
 		} label: {
 			statusDot("MCP", color: mcpModel.isReachable ? .green : .secondary, describedBy: help)
 		}
@@ -189,15 +192,18 @@ struct StackView: View {
 			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
-			Button("Stop Server") { Task { await server.stop() } }
+			Button("Stop Server...") { windowState.isConfirmingStopServer = true }
 				.disabled(!server.isOwned)
 
-			Button("Set Up Server") { isSettingUpServer = true }
+			Button("Set Up Server...") { windowState.isSettingUpServer = true }
 
 			Divider()
 
-			Button("Show Server Log") { isShowingServerLog = true }
-				.disabled(isShowingServerLog)
+			Button("Show Server Log") { windowState.isShowingServerLog = true }
+				.disabled(windowState.isShowingServerLog)
+
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
+				.disabled(configURLs.isEmpty)
 		} label: {
 			statusDot("Server", color: serverColor, describedBy: help)
 		}
@@ -278,7 +284,7 @@ struct StackView: View {
 	}
 
 	private var powerTitle: String {
-		model.power == .canStop ? "Stop Stack" : "Start Stack"
+		model.power == .canStop ? "Stop Stack..." : "Start Stack"
 	}
 
 	@ViewBuilder
@@ -292,7 +298,7 @@ struct StackView: View {
 					.font(.callout)
 			} actions: {
 				if server.state == .unconfigured {
-					Button("Set Up Server") { isSettingUpServer = true }
+					Button("Set Up Server...") { windowState.isSettingUpServer = true }
 				} else {
 					Button("Start Server") { Task { await server.start() } }
 						.disabled(!server.canStart)

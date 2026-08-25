@@ -61,6 +61,17 @@ public final class StackViewModel {
 		return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
 	}
 
+	/// Stopping the server takes every process with it, whichever project the window
+	/// is showing, so the confirmation counts them all.
+	public var stopServerQuestion: String {
+		let count = runningProcesses.count
+		guard count > 0 else { return "Stop the server?" }
+
+		let label = count == 1 ? "1 running process" : "\(count) running processes"
+
+		return "Stop the server and \(label)?"
+	}
+
 	/// Stopping asks first because it is destructive; starting does not.
 	public func togglePower() {
 		switch power {

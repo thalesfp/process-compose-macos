@@ -1,10 +1,14 @@
+import AppKit
 import ProcessComposeCore
 import SwiftUI
 
-/// The menu bar. Every action the window offers is reachable from here with a key.
+/// The menu bar. Every action the window offers is reachable from here, and the
+/// process, stack and server tiers take Cmd, Cmd+Ctrl and Cmd+Option in turn.
 struct StackCommands: Commands {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
+	let server: ServerSupervisor
+	let windowState: WindowState
 	@Binding var logFontSize: Double
 
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
@@ -59,6 +63,30 @@ struct StackCommands: Commands {
 				.disabled(!model.canChangePower)
 		}
 
+		CommandMenu("Server") {
+			Button("Start Server") { Task { await server.start() } }
+				.keyboardShortcut("r", modifiers: [.command, .option])
+				.disabled(!server.canStart)
+
+			Button("Stop Server...") { windowState.isConfirmingStopServer = true }
+				.keyboardShortcut(".", modifiers: [.command, .option])
+				.disabled(!server.isOwned)
+
+			Divider()
+
+			Button("Set Up Server...") { windowState.isSettingUpServer = true }
+				.keyboardShortcut("s", modifiers: [.command, .option])
+
+			Button("Show Server Log") { windowState.isShowingServerLog = true }
+				.keyboardShortcut("l", modifiers: [.command, .option])
+				.disabled(windowState.isShowingServerLog)
+
+			Divider()
+
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
+				.disabled(configURLs.isEmpty)
+		}
+
 		CommandMenu("Log") {
 			Toggle("Follow", isOn: $logModel.isFollowing)
 				.keyboardShortcut("f", modifiers: [.command, .shift])
@@ -67,6 +95,10 @@ struct StackCommands: Commands {
 				.keyboardShortcut("k", modifiers: .command)
 				.disabled(logModel.selected == nil)
 		}
+	}
+
+	private var configURLs: [URL] {
+		(model.project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
 	}
 
 	private func title(_ verb: String) -> String {

@@ -376,6 +376,34 @@ struct StackViewModelTests {
 		#expect(viewModel.stopStackQuestion == "Stop 1 running process?")
 	}
 
+	@Test("names every running process when asked to stop the server")
+	func asksAboutTheServerAndItsProcesses() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "web", namespace: "web", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "web": "other/web"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+
+		await viewModel.observe()
+
+		#expect(viewModel.stopServerQuestion == "Stop the server and 2 running processes?")
+	}
+
+	@Test("asks about the server alone when nothing is running")
+	func asksAboutTheServerAlone() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+		])
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+
+		await viewModel.observe()
+
+		#expect(viewModel.stopServerQuestion == "Stop the server?")
+	}
+
 	@Test("offers nothing when no processes are known")
 	func offersNothingWhenDisconnected() async {
 		let client = StubClient(loadFailure: ProcessComposeError.unreachable(port: 28080))
