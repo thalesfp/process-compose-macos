@@ -194,6 +194,9 @@ public final class StackViewModel {
 	}
 
 	private var groupingError: String?
+	/// What the open question said would be left stopped, so consent can be checked against
+	/// what the server says when the answer finally comes back.
+	private var confirmedDependencies: [String] = []
 	private var adopting: Set<String> = []
 	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
@@ -295,20 +298,26 @@ public final class StackViewModel {
 	public func startStack() async {
 		guard canChangePower else { return refuse("start", "the stack") }
 
-		let ordered = inDependencyOrder(startableProcesses.map(\.name))
-
-		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: false), failureVerb: "start") {
-			try await self.client.start($0)
+		await applyToStack(
+			touching: processes.map(\.name),
+			stopping: false,
+			failureVerb: "start",
+			select: { self.startableProcesses.map(\.name) }
+		) { client, name in
+			try await client.start(name)
 		}
 	}
 
 	public func stopStack() async {
 		guard canChangePower else { return refuse("stop", "the stack") }
 
-		let ordered = inDependencyOrder(runningProcesses.map(\.name)).reversed().map { $0 }
-
-		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: true), failureVerb: "stop") {
-			try await self.client.stop($0)
+		await applyToStack(
+			touching: processes.map(\.name),
+			stopping: true,
+			failureVerb: "stop",
+			select: { self.runningProcesses.map(\.name) }
+		) { client, name in
+			try await client.stop(name)
 		}
 	}
 
@@ -317,7 +326,7 @@ public final class StackViewModel {
 		switch target {
 		case .stopStack: await stopStack()
 		case .stopProject(let name): await stopProject(name)
-		case .startProject(let name): await startProject(name)
+		case .startProject(let name): await startProject(name, confirmed: true)
 		case .stopServer: break
 		}
 	}
@@ -327,7 +336,10 @@ public final class StackViewModel {
 	public func requestStartProject(_ name: String) {
 		guard canStartProject(name) else { return refuse("start", name) }
 
-		guard missingDependencies(startingProject: name).isEmpty else {
+		let missing = missingDependencies(startingProject: name)
+
+		guard missing.isEmpty else {
+			confirmedDependencies = missing
 			confirmTarget = .startProject(name)
 			return
 		}
@@ -364,23 +376,42 @@ public final class StackViewModel {
 
 	/// Starts a single project's processes, leaving every other project alone. The
 	/// config's disabled processes stay off, as they do for the whole stack.
-	public func startProject(_ name: String) async {
+	public func startProject(_ name: String, confirmed: Bool = false) async {
 		guard canStartProject(name) else { return refuse("start", name) }
 
-		let ordered = inDependencyOrder(startableProcesses(in: name).map(\.name))
+		await applyToStack(
+			touching: processes.map(\.name),
+			stopping: false,
+			failureVerb: "start",
+			validate: {
+				let missing = self.missingDependencies(startingProject: name)
 
-		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: false), failureVerb: "start") {
-			try await self.client.start($0)
+				guard !confirmed else {
+					return missing == self.confirmedDependencies
+						? nil
+						: "What \(name) depends on changed while the question was open, so nothing was started"
+				}
+
+				guard !missing.isEmpty else { return nil }
+
+				return "\(name) depends on \(missing.joined(separator: ", ")), which is not running, so nothing was started"
+			},
+			select: { self.startableProcesses(in: name).map(\.name) }
+		) { client, process in
+			try await client.start(process)
 		}
 	}
 
 	public func stopProject(_ name: String) async {
 		guard canStopProject(name) else { return refuse("stop", name) }
 
-		let ordered = inDependencyOrder(stoppableProcesses(in: name).map(\.name)).reversed().map { $0 }
-
-		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: true), failureVerb: "stop") {
-			try await self.client.stop($0)
+		await applyToStack(
+			touching: processes.map(\.name),
+			stopping: true,
+			failureVerb: "stop",
+			select: { self.stoppableProcesses(in: name).map(\.name) }
+		) { client, process in
+			try await client.stop(process)
 		}
 	}
 
@@ -441,21 +472,52 @@ public final class StackViewModel {
 
 	// One process at a time, in the order given: the server starts only the process it is
 	// asked for, so firing the whole list at once would race their dependencies.
+	/// One bulk action from end to end. It takes the floor before it does anything that
+	/// waits, so nothing else can slip in behind an await; it re-reads what it is about to
+	/// touch from the server it started on; and it sends the requests in dependency order,
+	/// passing over anything whose prerequisite failed.
 	private func applyToStack(
-		_ names: [String],
-		blockedBy: [String: Set<String>] = [:],
+		touching members: [String],
+		stopping: Bool,
 		failureVerb: String,
-		_ operation: (String) async throws -> Void
+		validate: () -> String? = { nil },
+		select: () -> [String],
+		_ operation: (any ProcessComposeClient, String) async throws -> Void
 	) async {
-		guard !names.isEmpty else { return }
+		let client = self.client
+		let mine = generation
 
 		isChangingStack = true
 		defer { isChangingStack = false }
 
+		guard await refreshConfigurations(for: members, from: client, observation: mine) else { return }
+
+		// What was true when the action was offered is checked again against what the
+		// server just said, not against the cache the decision was taken from.
+		if let complaint = validate() {
+			lastError = complaint
+			return
+		}
+
+		let ordered = inDependencyOrder(select())
+		let names = stopping ? ordered.reversed().map { $0 } : ordered
+
+		guard !names.isEmpty else { return }
+
+		// `select` runs after the read, and the stream can bring a process in meanwhile.
+		// Anything that was not read has no dependency data this action can stand on.
+		guard Set(names).isSubset(of: Set(members)) else {
+			lastError = "The stack changed while it was being read, so nothing was changed"
+			return
+		}
+
+		let blockedBy = blockers(among: names, stopping: stopping)
 		var failures: [String] = []
 		var skipped: [String] = []
 
 		for name in names {
+			guard mine == generation else { return }
+
 			// Ordering only holds while everything before it worked: a process whose
 			// prerequisite never started would come up without it.
 			if let blockers = blockedBy[name],
@@ -466,7 +528,7 @@ public final class StackViewModel {
 
 			busy.insert(name)
 			do {
-				try await operation(name)
+				try await operation(client, name)
 			} catch {
 				failures.append(name)
 			}
@@ -482,7 +544,37 @@ public final class StackViewModel {
 			trouble.append("did not \(failureVerb) \(skipped.joined(separator: ", "))")
 		}
 
-		lastError = trouble.isEmpty ? nil : trouble.joined(separator: "; ")
+		lastError = trouble.isEmpty ? groupingError : trouble.joined(separator: "; ")
+	}
+
+	/// Dependency order is only as good as the configurations it was read from, and a stack
+	/// can be reloaded while the app stays connected, so what an action is about to touch is
+	/// read again first. A read it cannot complete stops the action rather than falling back
+	/// on what the cache happens to still hold.
+	private func refreshConfigurations(
+		for names: [String],
+		from client: any ProcessComposeClient,
+		observation mine: Int
+	) async -> Bool {
+		let loaded = await loadConfigurations(for: names, from: client)
+
+		guard mine == generation else { return false }
+
+		let unread = names.filter { loaded[$0] == nil }.sorted()
+
+		guard unread.isEmpty else {
+			lastError = "Could not read the configuration for \(unread.joined(separator: ", ")), so nothing was changed"
+			return false
+		}
+
+		for (name, configuration) in loaded {
+			configurations[name] = configuration
+			projectsByProcess[name] = ProcessGrouping.project(forWorkingDir: configuration.workingDir)
+		}
+
+		recomputeGrouping()
+
+		return true
 	}
 
 	/// What must not be acted on once something else has failed: for a start, whatever a
@@ -514,7 +606,8 @@ public final class StackViewModel {
 
 		do {
 			try await operation()
-			lastError = nil
+			// A grouping that is still short outlives this action, so its message stands.
+			lastError = groupingError
 		} catch {
 			lastError = "\(name): \(error.localizedDescription)"
 		}
@@ -536,7 +629,7 @@ public final class StackViewModel {
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
 
 			async let state = try? await client.projectState()
-			async let loaded = loadConfigurations(for: snapshot.map(\.name))
+			async let loaded = loadConfigurations(for: snapshot.map(\.name), from: client)
 			let loadedProject = await state
 			let loadedConfigurations = await loaded
 			guard isCurrent(mine) else { return }
@@ -637,7 +730,7 @@ public final class StackViewModel {
 	/// which leaves it in no project. Project actions are withheld from the moment it
 	/// appears until it has been placed.
 	private func adopt(_ name: String, observation mine: Int) async {
-		let loaded = await loadConfigurations(for: [name])
+		let loaded = await loadConfigurations(for: [name], from: client)
 
 		adopting.remove(name)
 
@@ -658,8 +751,11 @@ public final class StackViewModel {
 
 	// A process's configuration is fixed for the life of the project, so this runs
 	// once per connection rather than per state event.
-	private func loadConfigurations(for names: [String]) async -> [String: ProcessConfiguration] {
-		var loaded = await readConfigurations(for: names)
+	private func loadConfigurations(
+		for names: [String],
+		from client: any ProcessComposeClient
+	) async -> [String: ProcessConfiguration] {
+		var loaded = await readConfigurations(for: names, from: client)
 
 		// Each configuration is a request of its own, so a single blip would otherwise keep
 		// a process out of the grouping for the whole connection, with no second chance
@@ -668,17 +764,20 @@ public final class StackViewModel {
 
 		guard !unread.isEmpty else { return loaded }
 
-		for (name, configuration) in await readConfigurations(for: unread) {
+		for (name, configuration) in await readConfigurations(for: unread, from: client) {
 			loaded[name] = configuration
 		}
 
 		return loaded
 	}
 
-	private func readConfigurations(for names: [String]) async -> [String: ProcessConfiguration] {
+	private func readConfigurations(
+		for names: [String],
+		from client: any ProcessComposeClient
+	) async -> [String: ProcessConfiguration] {
 		await withTaskGroup(of: (String, ProcessConfiguration?).self) { group in
 			for name in names {
-				group.addTask { [client] in
+				group.addTask {
 					(name, try? await client.configuration(for: name))
 				}
 			}
