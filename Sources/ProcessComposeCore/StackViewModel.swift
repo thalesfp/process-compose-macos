@@ -386,28 +386,15 @@ public final class StackViewModel {
 	/// What the project depends on that this start will not bring up. Asking the server to
 	/// start a process starts that process alone: process-compose v1.122.0 does not follow
 	/// `depends_on` for a start, it only waits on the condition and carries on.
+	private var graph: DependencyGraph { DependencyGraph(configurations) }
+
 	public func missingDependencies(startingProject project: String) -> [String] {
 		let starting = Set(startableProcesses(in: project).map(\.name))
 
-		return closure(of: Array(starting))
+		return graph.closure(of: Array(starting))
 			.subtracting(starting)
 			.filter { statesByName[$0]?.isRunning != true }
 			.sorted()
-	}
-
-	/// Everything a start would touch: the processes asked for, and whatever they depend
-	/// on, all the way down.
-	private func closure(of names: [String]) -> Set<String> {
-		var reached: Set<String> = []
-		var pending = names
-
-		while let name = pending.popLast() {
-			guard reached.insert(name).inserted else { continue }
-
-			pending.append(contentsOf: configurations[name]?.dependsOn ?? [])
-		}
-
-		return reached
 	}
 
 	/// Starts a single project's processes, leaving every other project alone. The
@@ -495,33 +482,12 @@ public final class StackViewModel {
 		processes(in: project).filter(\.canStop)
 	}
 
-	/// Prerequisites first. Asking the server to start a process starts that one alone, so
-	/// a bulk action has to send them in an order that stands up on its own; a stop takes
-	/// the same order backwards. A dependency cycle keeps whatever order it is walked in.
-	private func inDependencyOrder(_ names: [String]) -> [String] {
-		let wanted = Set(names)
-		var ordered: [String] = []
-		var seen: Set<String> = []
-
-		func visit(_ name: String) {
-			guard wanted.contains(name), seen.insert(name).inserted else { return }
-
-			for dependency in configurations[name]?.dependsOn ?? [] { visit(dependency) }
-
-			ordered.append(name)
-		}
-
-		for name in names { visit(name) }
-
-		return ordered
-	}
+	private static let stackMovedUnderTheRead = "The stack changed while it was being read, so nothing was changed"
 
 	/// One bulk action from end to end. It takes the floor before it does anything that
 	/// waits, so nothing else can slip in behind an await; it re-reads what it is about to
 	/// touch from the server it started on; and it sends the requests in dependency order,
 	/// passing over anything whose prerequisite failed.
-	private static let stackMovedUnderTheRead = "The stack changed while it was being read, so nothing was changed"
-
 	private func applyToStack(
 		stopping: Bool,
 		validate: () -> String? = { nil },
@@ -556,7 +522,7 @@ public final class StackViewModel {
 			return
 		}
 
-		let ordered = inDependencyOrder(select())
+		let ordered = graph.inDependencyOrder(select())
 		let names = stopping ? Array(ordered.reversed()) : ordered
 
 		guard !names.isEmpty else { return }
@@ -568,7 +534,7 @@ public final class StackViewModel {
 			return
 		}
 
-		let blockedBy = blockers(among: names, stopping: stopping)
+		let blockedBy = graph.blockers(among: names, stopping: stopping)
 		var failures: [String] = []
 		var skipped: [String] = []
 		var stalled: Set<String> = []
@@ -636,23 +602,6 @@ public final class StackViewModel {
 
 	/// What must not be acted on once something else has failed: for a start, whatever a
 	/// process depends on; for a stop, whatever depends on it.
-	private func blockers(among names: [String], stopping: Bool) -> [String: Set<String>] {
-		let wanted = Set(names)
-		var blockers: [String: Set<String>] = [:]
-
-		for name in names {
-			for dependency in configurations[name]?.dependsOn ?? [] where wanted.contains(dependency) {
-				if stopping {
-					blockers[dependency, default: []].insert(name)
-				} else {
-					blockers[name, default: []].insert(dependency)
-				}
-			}
-		}
-
-		return blockers
-	}
-
 	public func dismissError() {
 		lastError = nil
 	}
