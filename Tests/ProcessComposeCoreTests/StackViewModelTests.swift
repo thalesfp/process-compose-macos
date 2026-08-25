@@ -1180,6 +1180,42 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("sends nothing when a process arrives while the action is reading")
+	func abandonsAnActionWhenAProcessArrivesMidRead() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "acme/extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		client.hold(["api", "extra"])
+		let bulk = Task { await viewModel.stopProject("acme") }
+		await settle(until: { viewModel.isChangingStack })
+
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.processes.count == 2 })
+
+		// The action's own read goes through, but the newcomer is still being placed.
+		client.hold(["extra"])
+		await bulk.value
+
+		#expect(client.stopped.isEmpty)
+
+		// The newcomer is placed afterwards, and the refusal still stands.
+		client.hold([])
+		await settle(until: { viewModel.isGroupingComplete })
+
+		#expect(viewModel.lastError == "The stack changed while it was being read, so nothing was changed")
+
+		client.finishStream()
+		await session.value
+	}
+
 	@Test("does not ask when the dependency it needs is already up")
 	func doesNotAskAboutADependencyAlreadyRunning() async {
 		let client = StubClient(processes: [

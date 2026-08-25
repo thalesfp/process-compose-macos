@@ -548,6 +548,15 @@ public final class StackViewModel {
 		guard await refreshConfigurations(for: members, from: client, observation: mine, epoch: epoch) else { return }
 		guard epoch == actionEpoch else { return }
 
+		// The stream can bring a process in while the read is out, and until it has been
+		// placed nobody can say which project it belongs to, including this action's.
+		guard isGroupingComplete else {
+			// Not the grouping message: that one is cleared the moment the newcomer is
+			// placed, and the user would be left with no sign the action was refused.
+			lastError = "The stack changed while it was being read, so nothing was changed"
+			return
+		}
+
 		// What was true when the action was offered is checked again against what the
 		// server just said, not against the cache the decision was taken from.
 		if let complaint = validate() {
