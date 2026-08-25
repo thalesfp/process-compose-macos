@@ -95,9 +95,11 @@ public final class StackViewModel {
 
 			return count == 0 ? "Stop the server?" : "Stop the server and \(Self.runningLabel(count))?"
 		case .startProject(let name):
-			let others = projectsReached(startingBeyond: name)
+			let missing = missingDependencies(startingProject: name)
+				.map { "\($0) in \(projectsByProcess[$0] ?? ProcessGrouping.ungrouped)" }
+			let verb = missing.count == 1 ? "is" : "are"
 
-			return "Starting \(name) also starts what it depends on in \(others.joined(separator: ", "))?"
+			return "\(name) depends on \(missing.joined(separator: ", ")), which \(verb) not running. Start \(name) anyway?"
 		}
 	}
 
@@ -316,12 +318,12 @@ public final class StackViewModel {
 		}
 	}
 
-	/// Starting asks first only when it would reach past the project asked for, since
-	/// process-compose starts what a process depends on before starting it.
+	/// Starting asks first only when the project would come up without something it
+	/// depends on, since starting a process leaves its dependencies where they are.
 	public func requestStartProject(_ name: String) {
 		guard canStartProject(name) else { return refuse("start", name) }
 
-		guard projectsReached(startingBeyond: name).isEmpty else {
+		guard missingDependencies(startingProject: name).isEmpty else {
 			confirmTarget = .startProject(name)
 			return
 		}
@@ -329,15 +331,16 @@ public final class StackViewModel {
 		Task { await startProject(name) }
 	}
 
-	/// The projects other than this one that starting it would reach.
-	public func projectsReached(startingBeyond project: String) -> [String] {
-		let reached = closure(of: startableProcesses(in: project).map(\.name))
-		// Something already up is not started again, so it does not widen the reach.
-		let others = reached
-			.filter { statesByName[$0]?.isStartable ?? false }
-			.map { projectsByProcess[$0] ?? ProcessGrouping.ungrouped }
+	/// What the project depends on that this start will not bring up. Asking the server to
+	/// start a process starts that process alone: process-compose v1.122.0 does not follow
+	/// `depends_on` for a start, it only waits on the condition and carries on.
+	public func missingDependencies(startingProject project: String) -> [String] {
+		let starting = Set(startableProcesses(in: project).map(\.name))
 
-		return Set(others.filter { $0 != project }).sorted()
+		return closure(of: Array(starting))
+			.subtracting(starting)
+			.filter { statesByName[$0]?.isRunning != true }
+			.sorted()
 	}
 
 	/// Everything a start would touch: the processes asked for, and whatever they depend

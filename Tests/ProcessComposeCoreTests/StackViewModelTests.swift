@@ -650,8 +650,8 @@ struct StackViewModelTests {
 		await session.value
 	}
 
-	@Test("asks before a start reaches past the project it was asked for")
-	func asksWhenAStartCrossesProjects() async {
+	@Test("says what a start will leave behind before it runs")
+	func asksWhenADependencyWillNotStart() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
 			.init(name: "db", namespace: "ai", status: .completed, isRunning: false),
@@ -667,14 +667,14 @@ struct StackViewModelTests {
 
 		#expect(viewModel.confirmTarget == .startProject("acme"))
 		#expect(viewModel.question(for: .startProject("acme"))
-			== "Starting acme also starts what it depends on in chatbot-ai?")
+			== "acme depends on db in chatbot-ai, which is not running. Start acme anyway?")
 		#expect(client.started.isEmpty)
 
 		client.finishStream()
 		await session.value
 	}
 
-	@Test("does not ask about a dependency that is already up")
+	@Test("does not ask when the dependency it needs is already up")
 	func doesNotAskAboutADependencyAlreadyRunning() async {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
