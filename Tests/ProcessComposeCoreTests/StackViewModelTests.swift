@@ -1002,11 +1002,15 @@ struct StackViewModelTests {
 		let bulk = Task { await viewModel.stopProject("acme") }
 		await settle(until: { viewModel.isChangingStack })
 
+		// The reload would move worker across, but nothing this read found may be published.
+		client.workingDirs["worker"] = "chatbot-ai/worker"
 		viewModel.abandonActions()
 		client.hold([])
 		await bulk.value
 
 		#expect(client.stopped.isEmpty)
+		#expect(viewModel.selectedProject == "acme")
+		#expect(viewModel.projects.map(\.name) == ["acme"])
 
 		client.finishStream()
 		await session.value
@@ -1122,6 +1126,55 @@ struct StackViewModelTests {
 		await viewModel.perform(captured)
 
 		#expect(client.stopped.isEmpty)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("lets go of a selected process a reload moved out of the project")
+	func clearsASelectionAReloadMovedAway() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.selection = "worker"
+
+		// The reload moves worker out of acme.
+		client.workingDirs["worker"] = "chatbot-ai/worker"
+		await viewModel.stopProject("acme")
+
+		#expect(viewModel.selection == nil)
+		#expect(client.stopped == ["api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not follow a process into a project nobody chose")
+	func dropsASelectionWhenItsProjectDisappears() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "solo/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.select(project: "solo")
+		viewModel.selection = "worker"
+
+		// The reload moves worker into acme, so solo has nobody left.
+		client.workingDirs["worker"] = "acme/worker"
+		await viewModel.stopStack()
+
+		#expect(viewModel.selectedProject == "acme")
+		#expect(viewModel.selection == nil)
 
 		client.finishStream()
 		await session.value

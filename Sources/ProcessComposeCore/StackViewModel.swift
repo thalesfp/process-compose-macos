@@ -545,7 +545,7 @@ public final class StackViewModel {
 		isChangingStack = true
 		defer { isChangingStack = false }
 
-		guard await refreshConfigurations(for: members, from: client, observation: mine) else { return }
+		guard await refreshConfigurations(for: members, from: client, observation: mine, epoch: epoch) else { return }
 		guard epoch == actionEpoch else { return }
 
 		// What was true when the action was offered is checked again against what the
@@ -610,11 +610,14 @@ public final class StackViewModel {
 	private func refreshConfigurations(
 		for names: [String],
 		from client: any ProcessComposeClient,
-		observation mine: Int
+		observation mine: Int,
+		epoch: Int
 	) async -> Bool {
 		let loaded = await loadConfigurations(for: names, from: client)
 
-		guard mine == generation else { return false }
+		// Nothing this read found is published once the work it was for has been abandoned,
+		// or the sidebar could be moved by an action that is about to be refused anyway.
+		guard mine == generation, epoch == actionEpoch else { return false }
 
 		let unread = names.filter { loaded[$0] == nil }.sorted()
 
@@ -629,6 +632,12 @@ public final class StackViewModel {
 		}
 
 		recomputeGrouping()
+
+		// The re-read can move a process to another project, so the sidebar and the row
+		// selection settle here the same way they do for the processes a connection starts
+		// with and for one the stream brings in.
+		reconcileProject()
+		reconcileSelection()
 
 		return true
 	}
@@ -752,6 +761,10 @@ public final class StackViewModel {
 	private func reconcileProject() {
 		let known = projects.map(\.name)
 		if let selectedProject, known.contains(selectedProject) { return }
+
+		// Falling back to another project is a switch, and a row selection never survives
+		// one: otherwise it would follow a process into a project nobody chose.
+		if selectedProject != nil { selection = nil }
 
 		selectedProject = known.first
 	}
