@@ -200,6 +200,8 @@ public final class StackViewModel {
 	/// What the open question said would be left stopped, so consent can be checked against
 	/// what the server says when the answer finally comes back.
 	private var confirmedDependencies: [String] = []
+	/// What the open stop question said it would stop, so a reload cannot widen it.
+	private var confirmedProcesses: [String] = []
 	private var adopting: Set<String> = []
 	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
@@ -250,6 +252,9 @@ public final class StackViewModel {
 		project = nil
 		uptime = nil
 		selection = nil
+		// Nothing is connected now, so asking for the address that was refused, or for the
+		// one before it, has to reconnect rather than be taken for where we already are.
+		connectedAddress = nil
 		connection = .disconnected(reason: reason)
 	}
 
@@ -277,6 +282,7 @@ public final class StackViewModel {
 		actionEpoch += 1
 		confirmTarget = nil
 		confirmedDependencies = []
+		confirmedProcesses = []
 	}
 
 	public func isBusy(_ name: String?) -> Bool {
@@ -343,7 +349,7 @@ public final class StackViewModel {
 	public func perform(_ target: ConfirmTarget) async {
 		switch target {
 		case .stopStack: await stopStack()
-		case .stopProject(let name): await stopProject(name)
+		case .stopProject(let name): await stopProject(name, confirmed: true)
 		case .startProject(let name): await startProject(name, confirmed: true)
 		case .stopServer: break
 		}
@@ -420,13 +426,28 @@ public final class StackViewModel {
 		}
 	}
 
-	public func stopProject(_ name: String) async {
+	/// Raises the question, remembering exactly what it says it will stop.
+	public func requestStopProject(_ name: String) {
+		guard canStopProject(name) else { return refuse("stop", name) }
+
+		confirmedProcesses = stoppableProcesses(in: name).map(\.name).sorted()
+		confirmTarget = .stopProject(name)
+	}
+
+	public func stopProject(_ name: String, confirmed: Bool = false) async {
 		guard canStopProject(name) else { return refuse("stop", name) }
 
 		await applyToStack(
 			touching: processes.map(\.name),
 			stopping: true,
 			failureVerb: "stop",
+			validate: {
+				guard confirmed else { return nil }
+
+				return self.stoppableProcesses(in: name).map(\.name).sorted() == self.confirmedProcesses
+					? nil
+					: "What is running in \(name) changed while the question was open, so nothing was stopped"
+			},
 			select: { self.stoppableProcesses(in: name).map(\.name) }
 		) { client, process in
 			try await client.stop(process)

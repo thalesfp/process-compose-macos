@@ -442,6 +442,7 @@ struct StackViewModelTests {
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
 
+		viewModel.requestStopProject("acme")
 		await viewModel.perform(.stopProject("acme"))
 
 		#expect(client.stopped == ["api"])
@@ -1031,6 +1032,46 @@ struct StackViewModelTests {
 
 		client.finishStream()
 		await session.value
+	}
+
+	@Test("stops nothing when what is running changed while the question was open")
+	func abandonsAConfirmedStopWhenTheProjectChanged() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "extra", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "chatbot-ai/app"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStopProject("acme")
+
+		// A reload moves extra into acme while the question is on screen.
+		client.workingDirs["extra"] = "acme/extra"
+		await viewModel.perform(.stopProject("acme"))
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "What is running in acme changed while the question was open, so nothing was stopped")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("connects again after an address it refused is corrected back")
+	func reconnectsAfterARefusedAddress() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		viewModel.use(client, at: .standard)
+
+		viewModel.refuseAddress("Settings has no usable server address")
+		viewModel.use(client, at: .standard)
+
+		#expect(viewModel.connection != .disconnected(reason: "Settings has no usable server address"))
 	}
 
 	@Test("does not ask when the dependency it needs is already up")
