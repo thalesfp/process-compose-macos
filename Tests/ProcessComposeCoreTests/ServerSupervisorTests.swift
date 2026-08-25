@@ -20,6 +20,78 @@ struct ServerSupervisorTests {
 		#expect(runner.launched.isEmpty)
 	}
 
+	@Test("takes a new identity when it is pointed at another server")
+	func changesIdentityWhenRepointed() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let first = supervisor.identity
+
+		await supervisor.use(address: ServerAddress(host: "localhost", port: 28099), plan: .test)
+
+		#expect(supervisor.identity != first)
+	}
+
+	@Test("stops nothing when the server it was asked about is no longer the one it holds")
+	func refusesToStopAServerItWasNotAskedAbout() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let stale = supervisor.identity - 1
+
+		await supervisor.stop(expecting: stale)
+
+		#expect(supervisor.state == .running(owned: true))
+
+		await supervisor.stop(expecting: supervisor.identity)
+
+		#expect(supervisor.state != .running(owned: true))
+	}
+
+	@Test("keeps its identity when a second window asks for the same server")
+	func keepsIdentityForTheSameServer() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let first = supervisor.identity
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.identity == first)
+	}
+
+	@Test("takes a new identity when the server behind it is replaced")
+	func changesIdentityWhenTheServerIsReplaced() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let running = supervisor.identity
+
+		// The server going is itself a change: `stop` does not bump the counter on its own,
+		// so only tracking the concrete server catches this.
+		await supervisor.stop()
+
+		#expect(supervisor.identity != running)
+	}
+
 	@Test("takes back the server an earlier run left behind")
 	func adoptsRecordedServer() async {
 		let runner = FakeRunner()
@@ -186,7 +258,7 @@ struct ServerSupervisorTests {
 		)
 
 		let first = Task { await supervisor.use(address: .standard, plan: .test) }
-		await until { probe.didStart }
+		await settle(until: { probe.didStart })
 
 		// The settings move on while the first request is still looking at the port.
 		probe.answerNow()
@@ -772,7 +844,7 @@ struct ServerSupervisorTests {
 
 		// Two windows asking for the same thing; the second goes away mid-probe.
 		let first = Task { await supervisor.use(address: .standard, plan: .test) }
-		await until { probe.didStart }
+		await settle(until: { probe.didStart })
 		let second = Task { await supervisor.use(address: .standard, plan: .test) }
 		second.cancel()
 
@@ -795,7 +867,7 @@ struct ServerSupervisorTests {
 		)
 
 		let first = Task { await supervisor.use(address: .standard, plan: .test) }
-		await until { probe.didStart }
+		await settle(until: { probe.didStart })
 
 		let other = ServerAddress(host: "localhost", port: 28081)!
 		let second = Task { await supervisor.use(address: other, plan: .test) }
@@ -844,7 +916,7 @@ struct ServerSupervisorTests {
 		runner.started?.exitStatus = -1
 
 		await supervisor.stop()
-		await until { supervisor.state == .idle }
+		await settle(until: { supervisor.state == .idle })
 
 		#expect(supervisor.state == .idle)
 	}
@@ -885,17 +957,9 @@ struct ServerSupervisorTests {
 
 		await supervisor.use(address: .standard, plan: .test)
 		runner.started?.emit("chatbot is running")
-		await until { supervisor.log.lines.count == 1 }
+		await settle(until: { supervisor.log.lines.count == 1 })
 
 		#expect(supervisor.log.lines.first?.text == "chatbot is running")
-	}
-}
-
-/// Spins the main actor until the watch task has caught up.
-@MainActor
-private func until(_ condition: () -> Bool, attempts: Int = 1000) async {
-	for _ in 0 ..< attempts where !condition() {
-		await Task.yield()
 	}
 }
 

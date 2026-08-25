@@ -75,14 +75,6 @@ struct HostileSettingsTests {
 	}
 }
 
-/// Holds a test at the point where the server has answered and the event stream is open.
-@MainActor
-private func untilConnected(_ viewModel: StackViewModel, attempts: Int = 1000) async {
-	for _ in 0 ..< attempts where viewModel.connection != .connected {
-		await Task.yield()
-	}
-}
-
 @MainActor
 struct StackSummaryTests {
 	@Test("counts running processes from live state, not the connection snapshot")
@@ -93,7 +85,7 @@ struct StackSummaryTests {
 		])
 		let viewModel = StackViewModel(client: client)
 		let session = Task { await viewModel.observe() }
-		await untilConnected(viewModel)
+		await settle(viewModel)
 
 		#expect(viewModel.project?.runningProcessNum == 0)
 		#expect(viewModel.runningCount == 1)
@@ -111,7 +103,7 @@ struct StackSummaryTests {
 		let clock = MovableClock()
 		let viewModel = StackViewModel(client: client, now: { clock.now })
 		let session = Task { await viewModel.observe() }
-		await untilConnected(viewModel)
+		await settle(viewModel)
 
 		#expect(viewModel.uptime == .seconds(0))
 

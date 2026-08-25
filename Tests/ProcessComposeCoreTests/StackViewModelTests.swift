@@ -146,6 +146,8 @@ struct StackViewModelTests {
 		let client = StubClient(processes: [.init(name: "relay", status: .disabled)])
 		client.actionFailure = ProcessComposeError.server(message: "no such process: relay")
 		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
 
 		await viewModel.startProcess("relay")
 
@@ -158,6 +160,8 @@ struct StackViewModelTests {
 		let client = StubClient(processes: [.init(name: "relay", status: .disabled)])
 		client.actionFailure = ProcessComposeError.server(message: "boom")
 		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
 
 		await viewModel.startProcess("relay")
 		client.actionFailure = nil
@@ -229,8 +233,9 @@ struct StackViewModelTests {
 			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.startStack()
 
@@ -245,12 +250,16 @@ struct StackViewModelTests {
 			.init(name: "houston-api", namespace: "houston", status: .disabled),
 		])
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.startStack()
 
 		#expect(client.started == ["api"])
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("stops every running process and leaves the stopped ones alone")
@@ -260,12 +269,16 @@ struct StackViewModelTests {
 			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.stopStack()
 
 		#expect(client.stopped == ["api"])
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("names the processes that refused to start")
@@ -276,13 +289,17 @@ struct StackViewModelTests {
 		])
 		client.refusingProcesses = ["worker"]
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.startStack()
 
 		#expect(client.started == ["api", "worker"])
 		#expect(viewModel.lastError == "Could not start worker")
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("offers to start the stack when every process is stopped")
@@ -360,7 +377,7 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.stopStackQuestion == "Stop 2 running processes across 2 projects?")
+		#expect(viewModel.question(for: .stopStack(promised: ["api", "chatbot"])) == "Stop 2 running processes across 2 projects?")
 	}
 
 	@Test("asks about the processes alone when one project has all of them")
@@ -373,7 +390,1113 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.stopStackQuestion == "Stop 1 running process?")
+		#expect(viewModel.question(for: .stopStack(promised: ["api"])) == "Stop 1 running process?")
+	}
+
+	@Test("asks only about the project a stop names")
+	func asksAboutOneProjectAlone() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+
+		await viewModel.observe()
+
+		#expect(viewModel.question(for: .stopProject("acme", promised: ["api", "worker"])) == "Stop 2 running processes in acme?")
+	}
+
+	@Test("stops only the processes of the project it was given")
+	func stopsOneProjectOnly() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStopProject("acme")
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped == ["api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("starts only the processes of the project it was given, leaving disabled ones off")
+	func startsOneProjectOnly() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "seed", namespace: "api", status: .disabled, isRunning: false),
+			.init(name: "chatbot", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "seed": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withholds project actions while a process's project is unknown")
+	func withholdsProjectActionsWhenGroupingIsIncomplete() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(!viewModel.isGroupingComplete)
+		#expect(!viewModel.canStopProject("acme"))
+		#expect(!viewModel.canStartProject("acme"))
+		#expect(viewModel.lastError == "Could not read the configuration for worker, so project actions stay off")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("recovers the grouping when a configuration fails once and then answers")
+	func recoversGroupingAfterATransientConfigurationFailure() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurationsOnce = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(viewModel.isGroupingComplete)
+		#expect(viewModel.canStopProject("acme"))
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("puts a process the stream introduces into its own project")
+	func groupsAProcessTheStreamIntroduces() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "acme/extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.processes.count == 2 && viewModel.isGroupingComplete })
+
+		#expect(viewModel.projects.map(\.name) == ["acme"])
+		#expect(viewModel.canStopProject("acme"))
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withholds project actions when the stream introduces a process it cannot place")
+	func withholdsActionsForAnUnplaceableStreamProcess() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "acme/extra"]
+		client.refusingConfigurations = ["extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.canStopProject("acme"))
+
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { !viewModel.isGroupingComplete })
+
+		#expect(!viewModel.canStopProject("acme"))
+		#expect(viewModel.lastError == "Could not read the configuration for extra, so project actions stay off")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("tries again for a live process whose configuration failed the first time")
+	func retriesAdoptionForALiveProcess() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "acme/extra"]
+		client.refusingConfigurations = ["extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { !viewModel.isGroupingComplete })
+		#expect(!viewModel.canStopProject("acme"))
+
+		client.refusingConfigurations = []
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.isGroupingComplete })
+
+		#expect(viewModel.projects.map(\.name) == ["acme"])
+		#expect(viewModel.canStopProject("acme"))
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("selects the project the first live process brings with it")
+	func selectsAProjectIntroducedByTheStream() async {
+		let client = StubClient(processes: [])
+		client.workingDirs = ["extra": "acme/extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.selectedProject == nil)
+
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.selectedProject != nil })
+
+		#expect(viewModel.selectedProject == "acme")
+		#expect(viewModel.visibleProcesses.map(\.name) == ["extra"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("keeps applying state changes while a configuration read is still outstanding")
+	func keepsConsumingEventsDuringAdoption() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "acme/extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		client.hold(["extra"])
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { !viewModel.isGroupingComplete })
+
+		client.emit(.init(
+			state: .init(name: "api", namespace: "api", status: .completed, isRunning: false)
+		))
+		await settle(until: { viewModel.processes.first { $0.name == "api" }?.status == .completed })
+
+		#expect(viewModel.processes.first { $0.name == "api" }?.status == .completed)
+		#expect(!viewModel.isGroupingComplete)
+
+		client.hold([])
+		await settle(until: { viewModel.isGroupingComplete })
+
+		#expect(viewModel.projects.map(\.name) == ["acme"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("says what a start will leave behind before it runs")
+	func asksWhenADependencyWillNotStart() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "db", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "db": "chatbot-ai/app"]
+		client.dependencies = ["api": ["db"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStartProject("acme")
+
+		#expect(viewModel.confirmation?.target == .startProject("acme", missing: ["db"]))
+		#expect(viewModel.question(for: .startProject("acme", missing: ["db"]))
+			== "acme depends on db in chatbot-ai, which is not running. Start acme anyway?")
+		#expect(client.started.isEmpty)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("starts what a process depends on before the process itself")
+	func startsInDependencyOrder() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["worker", "api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops a process before the one it depends on")
+	func stopsInReverseDependencyOrder() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped == ["api", "worker"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not start what a failed prerequisite was needed for")
+	func skipsDependentsOfAFailedStart() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		client.refusingProcesses = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["worker"])
+		#expect(viewModel.lastError == "Could not start worker; did not start api")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not stop what a process that would not stop still depends on")
+	func skipsPrerequisitesOfAFailedStop() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		client.refusingProcesses = ["api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped == ["api"])
+		#expect(viewModel.lastError == "Could not stop api; did not stop worker")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("reads the dependencies again before acting, so a reloaded stack is honoured")
+	func rereadsDependenciesBeforeABulkAction() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		// The stack is reloaded, and api now depends on worker. Read from the cache the
+		// connection filled, the order would still be the plain one.
+		client.dependencies = ["api": ["worker"]]
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["worker", "api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("sends the rest of a bulk action to the server it started on")
+	func keepsABulkActionOnOneServer() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.holdActions = true
+		let other = StubClient(processes: [])
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		let bulk = Task { await viewModel.stopProject("acme") }
+		await settle(until: { !viewModel.isBusy("") && client.stopped.count == 1 })
+
+		viewModel.use(other)
+		client.holdActions = false
+		await bulk.value
+
+		#expect(other.stopped.isEmpty)
+
+		client.finishStream()
+		other.finishStream()
+		await session.value
+	}
+
+	@Test("keeps saying the grouping is short after an action succeeds")
+	func keepsTheGroupingErrorAfterAnAction() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stopProcess("api")
+
+		#expect(viewModel.lastError == "Could not read the configuration for worker, so project actions stay off")
+		#expect(!viewModel.canStopProject("acme"))
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("acts on nothing when it cannot re-read what it is about to touch")
+	func abandonsABulkActionWhenTheRefreshFails() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		// The server stops answering for one of them after the connection read it once.
+		client.refusingConfigurations = ["worker"]
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "Could not read the configuration for worker, so nothing was changed")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("holds the floor from the moment a bulk action starts reading")
+	func reservesTheFloorBeforeReading() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		client.hold(["api", "worker"])
+		let bulk = Task { await viewModel.stopProject("acme") }
+		await settle(until: { viewModel.isChangingStack })
+
+		// Nothing else may act while the bulk action is still reading.
+		#expect(!viewModel.canStop("api"))
+		#expect(!viewModel.canChangePower)
+		await viewModel.stopProcess("api")
+
+		#expect(client.stopped.isEmpty)
+
+		client.hold([])
+		await bulk.value
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("starts nothing when the reload adds a dependency nobody was asked about")
+	func abandonsAnUnconfirmedStartWhenAReloadAddsADependency() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "db", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "db": "chatbot-ai/app"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		// Nothing to ask about yet, so the menu would start it outright.
+		#expect(viewModel.missingDependencies(startingProject: "acme").isEmpty)
+
+		client.dependencies = ["api": ["db"]]
+		await viewModel.startProject("acme")
+
+		#expect(client.started.isEmpty)
+		#expect(viewModel.lastError == "acme depends on db, which is not running, so nothing was started")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("abandons a confirmed start when what it depends on changed since the question")
+	func abandonsAConfirmedStartWhenConsentWentStale() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "db", namespace: "ai", status: .completed, isRunning: false),
+			.init(name: "cache", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "db": "chatbot-ai/app", "cache": "chatbot-ai/cache"]
+		client.dependencies = ["api": ["db"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStartProject("acme")
+		#expect(viewModel.confirmation?.target == .startProject("acme", missing: ["db"]))
+
+		// The stack is reloaded while the question is on screen.
+		client.dependencies = ["api": ["db", "cache"]]
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.started.isEmpty)
+		#expect(viewModel.lastError == "What acme depends on changed while the question was open, so nothing was started")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("takes in a process a reload moved into the project")
+	func actsOnAProcessAReloadMovedIntoTheProject() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "extra", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "chatbot-ai/app"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.projects.map(\.name) == ["chatbot-ai", "acme"])
+
+		// The reload moves extra into acme.
+		client.workingDirs["extra"] = "acme/extra"
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped.sorted() == ["api", "extra"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withdraws an open question when the app is pointed at another server")
+	func withdrawsAQuestionOnAnotherServer() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.ask(.stopProject("acme", promised: ["api"]))
+
+		viewModel.use(StubClient(processes: []))
+
+		#expect(viewModel.confirmation == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("sends nothing more once the work under way is abandoned")
+	func abandonsWorkAlreadyUnderWay() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		// The action is held in its preflight read, as it would be while the server behind
+		// the same address is replaced.
+		client.hold(["api", "worker"])
+		let bulk = Task { await viewModel.stopProject("acme") }
+		await settle(until: { viewModel.isChangingStack })
+
+		// The reload would move worker across, but nothing this read found may be published.
+		client.workingDirs["worker"] = "chatbot-ai/worker"
+		viewModel.abandonActions()
+		client.hold([])
+		await bulk.value
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.selectedProject == "acme")
+		#expect(viewModel.projects.map(\.name) == ["acme"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("keeps an open question when another window asks for the same server")
+	func keepsAQuestionForTheSameServer() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.use(client, at: .standard)
+		viewModel.ask(.stopProject("acme", promised: ["api"]))
+
+		// A second window builds its own client for the very same address.
+		viewModel.use(StubClient(processes: []), at: .standard)
+
+		#expect(viewModel.confirmation?.target == .stopProject("acme", promised: ["api"]))
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops nothing when what is running changed while the question was open")
+	func abandonsAConfirmedStopWhenTheProjectChanged() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "extra", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "chatbot-ai/app"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStopProject("acme")
+
+		// A reload moves extra into acme while the question is on screen.
+		client.workingDirs["extra"] = "acme/extra"
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "What is running in acme changed while the question was open, so nothing was stopped")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("connects again after an address it refused is corrected back")
+	func reconnectsAfterARefusedAddress() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+		viewModel.use(client, at: .standard)
+
+		viewModel.refuseAddress("Settings has no usable server address")
+		viewModel.use(client, at: .standard)
+
+		#expect(viewModel.connection != .disconnected(reason: "Settings has no usable server address"))
+	}
+
+	@Test("stops nothing when a process starts while the stack question is open")
+	func abandonsAConfirmedStackStopWhenSomethingStarted() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.togglePower()
+		#expect(viewModel.confirmation?.target == .stopStack(promised: ["api"]))
+
+		// worker comes up while the question is on screen.
+		client.emit(.init(
+			state: .init(name: "worker", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.runningProcesses.count == 2 })
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "What is running changed while the question was open, so nothing was stopped")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does nothing with an answer captured before the work was abandoned")
+	func ignoresAnAnswerCapturedBeforeAbandonment() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStopProject("acme")
+		let captured = try! #require(viewModel.confirmation)
+
+		// The server behind the address is replaced while the question is on screen.
+		viewModel.abandonActions()
+		await viewModel.perform(captured)
+
+		#expect(client.stopped.isEmpty)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("lets go of a selected process a reload moved out of the project")
+	func clearsASelectionAReloadMovedAway() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.selection = "worker"
+
+		// The reload moves worker out of acme.
+		client.workingDirs["worker"] = "chatbot-ai/worker"
+		await viewModel.stopProject("acme")
+
+		#expect(viewModel.selection == nil)
+		#expect(client.stopped == ["api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not follow a process into a project nobody chose")
+	func dropsASelectionWhenItsProjectDisappears() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "solo/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.select(project: "solo")
+		viewModel.selection = "worker"
+
+		// The reload moves worker into acme, so solo has nobody left.
+		client.workingDirs["worker"] = "acme/worker"
+		await viewModel.stopStack()
+
+		#expect(viewModel.selectedProject == "acme")
+		#expect(viewModel.selection == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("sends nothing when a process arrives while the action is reading")
+	func abandonsAnActionWhenAProcessArrivesMidRead() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "extra": "acme/extra"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		client.hold(["api", "extra"])
+		let bulk = Task { await viewModel.stopProject("acme") }
+		await settle(until: { viewModel.isChangingStack })
+
+		client.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.processes.count == 2 })
+
+		// The action's own read goes through, but the newcomer is still being placed.
+		client.hold(["extra"])
+		await bulk.value
+
+		#expect(client.stopped.isEmpty)
+
+		// The newcomer is placed afterwards, and the refusal still stands.
+		client.hold([])
+		await settle(until: { viewModel.isGroupingComplete })
+
+		#expect(viewModel.lastError == "The stack changed while it was being read, so nothing was changed")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not ask when the dependency it needs is already up")
+	func doesNotAskAboutADependencyAlreadyRunning() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "db", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "db": "chatbot-ai/app"]
+		client.dependencies = ["api": ["db"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStartProject("acme")
+		await settle(until: { client.started == ["api"] })
+
+		#expect(viewModel.confirmation == nil)
+		#expect(client.started == ["api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("starts a project outright when nothing it depends on lies outside it")
+	func startsWithoutAskingWhenSelfContained() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.requestStartProject("acme")
+		await settle(until: { client.started.count == 2 })
+
+		#expect(viewModel.confirmation == nil)
+		#expect(client.started.sorted() == ["api", "worker"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withholds a project action while one of its processes is already busy")
+	func withholdsProjectActionWhileAProcessIsBusy() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.holdActions = true
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.canStopProject("acme"))
+
+		let single = Task { await viewModel.stopProcess("api") }
+		await settle(until: { viewModel.isBusy("api") })
+
+		#expect(!viewModel.canStopProject("acme"))
+		#expect(!viewModel.canStartProject("acme"))
+
+		client.holdActions = false
+		await single.value
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withholds the stack power while one process is still answering")
+	func withholdsStackPowerWhileAProcessIsBusy() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.holdActions = true
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.canChangePower)
+
+		let single = Task { await viewModel.stopProcess("api") }
+		await settle(until: { viewModel.isBusy("api") })
+
+		#expect(!viewModel.canChangePower)
+
+		client.holdActions = false
+		await single.value
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("withholds a project start while a dependency in another project is busy")
+	func withholdsProjectStartWhileADependencyIsBusy() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "db", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "db": "chatbot-ai/app"]
+		client.dependencies = ["api": ["db"]]
+		client.holdActions = true
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.canStartProject("acme"))
+
+		let single = Task { await viewModel.stopProcess("db") }
+		await settle(until: { viewModel.isBusy("db") })
+
+		#expect(!viewModel.canStartProject("acme"))
+
+		client.holdActions = false
+		await single.value
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("refuses a single process's action while a stack action is still running")
+	func refusesARowActionDuringAStackAction() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.holdActions = true
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		let group = Task { await viewModel.stopStack() }
+		await settle(until: { viewModel.isChangingStack })
+
+		// A process the group has not reached yet, so the refusal is the group action's
+		// doing rather than that one process already being busy.
+		await viewModel.stopProcess("api")
+
+		#expect(client.stopped == ["worker"])
+
+		client.holdActions = false
+		await group.value
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("refuses a stack action while one process is still answering")
+	func refusesAStackActionDuringARowAction() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.holdActions = true
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		let single = Task { await viewModel.stopProcess("api") }
+		await settle(until: { viewModel.isBusy("api") })
+
+		await viewModel.stopStack()
+
+		#expect(client.stopped == ["api"])
+		#expect(viewModel.lastError == "Did not stop the stack, because what it could do changed")
+
+		client.holdActions = false
+		await single.value
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops saying the grouping is short once every configuration answers")
+	func clearsTheGroupingErrorOnRecovery() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let first = Task { await viewModel.observe() }
+		await settle(viewModel)
+		#expect(viewModel.lastError != nil)
+		client.finishStream()
+		await first.value
+
+		client.refusingConfigurations = []
+		await viewModel.observe()
+
+		#expect(viewModel.isGroupingComplete)
+		#expect(viewModel.lastError == nil)
+	}
+
+	@Test("stops nothing in a project it cannot account for, even when asked directly")
+	func refusesAProjectStopWhileGroupingIsIncomplete() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.refusingConfigurations = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "Did not stop acme, because what it could do changed")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("offers project actions once every process is accounted for")
+	func offersProjectActionsWhenGroupingIsComplete() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(viewModel.isGroupingComplete)
+		#expect(viewModel.canStopProject("acme"))
+		#expect(viewModel.canStartProject("acme"))
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("offers no project actions once the server is gone")
+	func offersNoProjectActionsWhileDisconnected() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+
+		await viewModel.observe()
+
+		#expect(!viewModel.canStopProject("acme"))
+		#expect(!viewModel.canStartProject("acme-ai-chatbot"))
+	}
+
+	@Test("names every running process when asked to stop the server")
+	func asksAboutTheServerAndItsProcesses() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "web", namespace: "web", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "web": "other/web"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(viewModel.question(for: .stopServer(identity: 0)) == "Stop the server and 2 running processes?")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not promise the server is idle when it has no list of what it runs")
+	func asksConservativelyAboutAServerItCannotSee() async {
+		let client = StubClient(loadFailure: ProcessComposeError.unreachable(port: 28080))
+		let viewModel = StackViewModel(client: client)
+
+		await viewModel.observe()
+
+		#expect(viewModel.question(for: .stopServer(identity: 0)) == "Stop the server and every process it is running?")
+	}
+
+	@Test("asks about the server alone when nothing is running")
+	func asksAboutTheServerAlone() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+		])
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		#expect(viewModel.question(for: .stopServer(identity: 0)) == "Stop the server?")
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("offers nothing when no processes are known")
@@ -459,6 +1582,7 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 	nonisolated(unsafe) var stopped: [String] = []
 
 	nonisolated(unsafe) var workingDirs: [String: String] = [:]
+	nonisolated(unsafe) var dependencies: [String: [String]] = [:]
 	nonisolated(unsafe) var logStreamFailure: (any Error)?
 	nonisolated(unsafe) var truncated: [String] = []
 
@@ -479,8 +1603,35 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 
 	func processes() async throws -> [ProcessState] { try loadResult.get() }
 
+	nonisolated(unsafe) var refusingConfigurations: Set<String> = []
+	/// Names whose first configuration request fails and whose second succeeds.
+	nonisolated(unsafe) var refusingConfigurationsOnce: Set<String> = []
+
+	private let configurationLock = NSLock()
+	nonisolated(unsafe) private var refusedOnce: Set<String> = []
+	nonisolated(unsafe) private var heldConfigurations: Set<String> = []
+
+	/// Holds a configuration request open, so a test can see what happens meanwhile.
+	func hold(_ names: Set<String>) {
+		configurationLock.withLock { heldConfigurations = names }
+	}
+
 	func configuration(for name: String) async throws -> ProcessConfiguration {
-		ProcessConfiguration(workingDir: workingDirs[name])
+		guard !refusingConfigurations.contains(name) else {
+			throw ProcessComposeError.unreachable(port: 28080)
+		}
+
+		while configurationLock.withLock({ heldConfigurations.contains(name) }) {
+			try? await Task.sleep(for: .milliseconds(5))
+		}
+
+		let refusingNow = configurationLock.withLock {
+			refusingConfigurationsOnce.contains(name) && refusedOnce.insert(name).inserted
+		}
+
+		guard !refusingNow else { throw ProcessComposeError.unreachable(port: 28080) }
+
+		return ProcessConfiguration(workingDir: workingDirs[name], dependsOn: dependencies[name] ?? [])
 	}
 
 	/// Lets a test hold a connection inside its setup phase.
@@ -504,8 +1655,21 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 		try failIfConfigured(name)
 	}
 
+	nonisolated(unsafe) private var holdingActions = false
+
+	/// Keeps a process action in flight, so a test can look at the model while it is busy.
+	var holdActions: Bool {
+		get { configurationLock.withLock { holdingActions } }
+		set { configurationLock.withLock { holdingActions = newValue } }
+	}
+
 	func stop(_ name: String) async throws {
 		stopped.append(name)
+
+		while holdActions {
+			try? await Task.sleep(for: .milliseconds(5))
+		}
+
 		try failIfConfigured(name)
 	}
 

@@ -1,13 +1,19 @@
+import AppKit
 import ProcessComposeCore
 import SwiftUI
 
-/// The menu bar. Every action the window offers is reachable from here with a key.
+/// The menu bar. Every action the window offers is reachable from here, and the
+/// process, stack and server tiers take Cmd, Cmd+Ctrl and Cmd+Option in turn.
 struct StackCommands: Commands {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
+	let server: ServerSupervisor
 	@Binding var logFontSize: Double
 
+	@FocusedValue(\.windowState) private var windowState: WindowState?
+
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
+	@AppStorage(PreferenceKey.splitFraction) private var splitFraction = PreferenceDefault.splitFraction
 
 	var body: some Commands {
 		CommandGroup(replacing: .newItem) {}
@@ -31,9 +37,25 @@ struct StackCommands: Commands {
 				.disabled(logFontSize == LogFont.standard)
 
 			Divider()
+
+			Button("Taller Log Pane") { splitFraction = SplitLayout.stepped(splitFraction, by: -SplitLayout.step) }
+				.keyboardShortcut(.downArrow, modifiers: [.command, .control])
+				.disabled(!SplitLayout.canStep(splitFraction, by: -SplitLayout.step))
+
+			Button("Shorter Log Pane") { splitFraction = SplitLayout.stepped(splitFraction, by: SplitLayout.step) }
+				.keyboardShortcut(.upArrow, modifiers: [.command, .control])
+				.disabled(!SplitLayout.canStep(splitFraction, by: SplitLayout.step))
+
+			Button("Reset Split") { splitFraction = PreferenceDefault.splitFraction }
+				.keyboardShortcut(KeyEquivalent("0"), modifiers: [.command, .control])
+				.disabled(splitFraction == PreferenceDefault.splitFraction)
+
+			Divider()
 		}
 
-		CommandMenu("Process") {
+		// One menu that widens as it is read: the selected process, then its project,
+		// then every project the server is running.
+		CommandMenu("Stack") {
 			Button(title("Start")) { run(model.startProcess) }
 				.keyboardShortcut("r", modifiers: .command)
 				.disabled(!model.canStart(model.selection))
@@ -48,6 +70,10 @@ struct StackCommands: Commands {
 
 			Divider()
 
+			ProjectActions(model: model, project: model.selectedProject)
+
+			Divider()
+
 			Button("Copy Name") { copySelectedName() }
 				.keyboardShortcut("c", modifiers: [.command, .shift])
 				.disabled(model.selection == nil)
@@ -59,7 +85,38 @@ struct StackCommands: Commands {
 				.disabled(!model.canChangePower)
 		}
 
+		CommandMenu("Server") {
+			Button("Start Server") { Task { await server.start() } }
+				.keyboardShortcut("r", modifiers: [.command, .option])
+				.disabled(!server.canStart)
+
+			Button("Stop Server...") { model.ask(.stopServer(identity: server.identity)) }
+				.keyboardShortcut(".", modifiers: [.command, .option])
+				.disabled(!server.isOwned)
+
+			Divider()
+
+			Button("Set Up Server...") { windowState?.isSettingUpServer = true }
+				.keyboardShortcut("s", modifiers: [.command, .option])
+				.disabled(windowState == nil)
+
+			Button("Show Server Log") { windowState?.isShowingServerLog = true }
+				.keyboardShortcut("l", modifiers: [.command, .option])
+				.disabled(windowState?.isShowingServerLog ?? true)
+
+			Divider()
+
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
+				.disabled(model.configURLs.isEmpty)
+		}
+
 		CommandMenu("Log") {
+			Button("Filter Log") { windowState?.filterFocusToken += 1 }
+				.keyboardShortcut("f", modifiers: .command)
+				.disabled(windowState == nil)
+
+			Divider()
+
 			Toggle("Follow", isOn: $logModel.isFollowing)
 				.keyboardShortcut("f", modifiers: [.command, .shift])
 

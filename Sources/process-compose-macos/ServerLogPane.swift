@@ -5,21 +5,27 @@ import SwiftUI
 struct ServerLogPane: View {
 	let log: ServerLog
 	let status: String
+	let windowState: WindowState
 	let close: () -> Void
 
 	@AppStorage(PreferenceKey.logFontSize) private var fontSize = LogFont.standard
 
 	@State private var isFollowing = true
+	@State private var filter = ""
+	@FocusState private var isFilterFocused: Bool
 
 	var body: some View {
-		VStack(spacing: 0) {
-			header
+		let visible = LogFilter.matching(log.lines, filter: filter)
+
+		return VStack(spacing: 0) {
+			header(visible: visible.count)
 			Divider()
-			output
+			output(visible)
 		}
+		.onChange(of: windowState.filterFocusToken) { isFilterFocused = true }
 	}
 
-	private var header: some View {
+	private func header(visible: Int) -> some View {
 		HStack(spacing: 10) {
 			Image(systemName: "server.rack")
 				.foregroundStyle(.secondary)
@@ -36,7 +42,9 @@ struct ServerLogPane: View {
 
 			Spacer(minLength: 12)
 
-			Text("\(log.lines.count) lines")
+			LogFilterField(text: $filter, isFocused: $isFilterFocused)
+
+			Text(LogFilter.countLabel(visible: visible, total: log.lines.count, filter: filter))
 				.font(.caption.monospacedDigit())
 				.foregroundStyle(.secondary)
 
@@ -58,11 +66,11 @@ struct ServerLogPane: View {
 	}
 
 	@ViewBuilder
-	private var output: some View {
+	private func output(_ visible: [LogLine]) -> some View {
 		if log.lines.isEmpty {
 			LogPlaceholder("The app has not started a server, so there is nothing to read here")
 		} else {
-			LogTextView(lines: log.lines, fontSize: fontSize, isFollowing: isFollowing)
+			FilteredLog(lines: visible, filter: filter, fontSize: fontSize, isFollowing: isFollowing)
 		}
 	}
 }

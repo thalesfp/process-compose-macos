@@ -3,18 +3,26 @@ import SwiftUI
 
 struct LogPane: View {
 	@Bindable var model: LogViewModel
+	let windowState: WindowState
 
 	@AppStorage(PreferenceKey.logFontSize) private var fontSize = LogFont.standard
 
+	@FocusState private var isFilterFocused: Bool
+
 	var body: some View {
-		VStack(spacing: 0) {
-			header
+		// Filtering walks the whole buffer, so it is done once here rather than by each
+		// part of the pane that needs the result.
+		let visible = model.visibleLines
+
+		return VStack(spacing: 0) {
+			header(visible: visible.count)
 			Divider()
-			output
+			output(visible)
 		}
+		.onChange(of: windowState.filterFocusToken) { isFilterFocused = true }
 	}
 
-	private var header: some View {
+	private func header(visible: Int) -> some View {
 		HStack(spacing: 10) {
 			Image(systemName: "text.alignleft")
 				.foregroundStyle(.secondary)
@@ -42,7 +50,9 @@ struct LogPane: View {
 					.lineLimit(1)
 			}
 
-			Text("\(model.lines.count) lines")
+			LogFilterField(text: $model.filter, isFocused: $isFilterFocused)
+
+			Text(LogFilter.countLabel(visible: visible, total: model.lines.count, filter: model.filter))
 				.font(.caption.monospacedDigit())
 				.foregroundStyle(.secondary)
 
@@ -60,12 +70,44 @@ struct LogPane: View {
 	}
 
 	@ViewBuilder
-	private var output: some View {
+	private func output(_ visible: [LogLine]) -> some View {
 		if model.selected == nil {
 			LogPlaceholder("Select a process to read its output")
 		} else {
-			LogTextView(lines: model.lines, fontSize: fontSize, isFollowing: model.isFollowing)
+			FilteredLog(lines: visible, filter: model.filter, fontSize: fontSize, isFollowing: model.isFollowing)
 		}
+	}
+}
+
+/// The filtered body both log panes show, and what it says when a filter keeps nothing.
+struct FilteredLog: View {
+	let lines: [LogLine]
+	let filter: String
+	let fontSize: Double
+	let isFollowing: Bool
+
+	var body: some View {
+		if lines.isEmpty, !filter.isEmpty {
+			LogPlaceholder("No lines match \"\(filter)\"")
+		} else {
+			LogTextView(lines: lines, fontSize: fontSize, isFollowing: isFollowing)
+		}
+	}
+}
+
+/// The filter box both log panes carry.
+struct LogFilterField: View {
+	@Binding var text: String
+	@FocusState.Binding var isFocused: Bool
+
+	var body: some View {
+		TextField("Filter", text: $text)
+			.textFieldStyle(.roundedBorder)
+			.controlSize(.small)
+			.font(.caption)
+			.frame(width: 160)
+			.focused($isFocused)
+			.accessibilityLabel("Filter the log")
 	}
 }
 

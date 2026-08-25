@@ -642,17 +642,33 @@ struct ManagedGroupTests {
 		)
 		let leader = server.pid
 
+		// A service is only discoverable while the process that started it is alive to
+		// point at it, so it has to be seen before the wrapper goes.
+		var held = server.membership
+		let deadline = ContinuousClock.now.advanced(by: .seconds(10))
+
+		while held[service] == nil, ContinuousClock.now < deadline {
+			try await Task.sleep(for: .milliseconds(20))
+			held = server.membership
+		}
+
 		await until { !UnixProcess.isAlive(leader) }
 
 		// The launch group is empty, so its number is free for another group to be given.
-		// Asking it to stop now would be asking whoever holds it next.
-		server.terminate()
+		// Forgetting it is what keeps a stop from reaching whoever holds it next.
+		let settled = server.membership
 
-		#expect(server.isRunning)
-		#expect(kill(service, 0) == 0)
+		#expect(settled[leader] == nil)
+		#expect(settled[service]?.contains { $0.pid == service } == true)
+
+		// What is left is asked to stop by the group holding it now, not by the number the
+		// stack was launched under.
+		server.terminate()
+		await until { kill(service, 0) != 0 }
+
+		#expect(kill(service, 0) != 0)
 
 		server.kill()
-		await until { kill(service, 0) != 0 }
 	}
 
 	@Test("forgets a group once what it was holding has moved on")

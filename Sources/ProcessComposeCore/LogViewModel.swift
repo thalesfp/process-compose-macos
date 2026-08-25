@@ -12,6 +12,14 @@ public final class LogViewModel {
 	/// Whether the pane pins itself to the newest line. Owned by the view.
 	public var isFollowing = true
 
+	/// The substring the pane shows lines for. Cleared with the selection, because a
+	/// filter written for one process is rarely the one wanted for the next.
+	public var filter = ""
+
+	public var visibleLines: [LogLine] {
+		LogFilter.matching(lines, filter: filter)
+	}
+
 	/// How many lines the pane keeps.
 	public var maxLines: Int {
 		get { buffer.maxLines }
@@ -51,6 +59,7 @@ public final class LogViewModel {
 
 		streamTask?.cancel()
 		selected = name
+		filter = ""
 		buffer.removeAll()
 		lastError = nil
 		isStreaming = false

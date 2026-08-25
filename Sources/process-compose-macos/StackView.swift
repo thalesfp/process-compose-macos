@@ -8,6 +8,8 @@ struct StackView: View {
 	let mcpModel: MCPServerViewModel
 	let server: ServerSupervisor
 
+	@State private var windowState = WindowState()
+
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
 
@@ -23,9 +25,6 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.suggestedConfigPath) private var suggestedConfig = PreferenceDefault.suggestedConfigPath
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 
-	@State private var isShowingServerLog = false
-	@State private var isSettingUpServer = false
-
 	var body: some View {
 		NavigationSplitView(columnVisibility: columnVisibility) {
 			sidebar
@@ -33,15 +32,20 @@ struct StackView: View {
 			VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
 				content
 			} bottom: {
-				if isShowingServerLog {
-					ServerLogPane(log: server.log, status: serverStatus) { isShowingServerLog = false }
+				if windowState.isShowingServerLog {
+					ServerLogPane(
+						log: server.log,
+						status: serverStatus,
+						windowState: windowState
+					) { windowState.isShowingServerLog = false }
 				} else {
-					LogPane(model: logModel)
+					LogPane(model: logModel, windowState: windowState)
 				}
 			}
 			.overlay(alignment: .bottom) { errorBar }
 			.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
 		}
+		.focusedSceneValue(\.windowState, windowState)
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
@@ -54,12 +58,17 @@ struct StackView: View {
 		.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
 		.onChange(of: model.selection) { _, name in
 			logModel.select(name)
-			if name != nil { isShowingServerLog = false }
+			if name != nil { windowState.isShowingServerLog = false }
 		}
 		.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
 		.onChange(of: model.project?.configFiles ?? []) { _, files in
 			ServerLaunchPlan.learnedConfiguration(from: files, current: configPath)
 				.map { suggestedConfig = $0 }
+		}
+		.onChange(of: server.identity) {
+			// Whatever was agreed to was agreed for the server that was there when the
+			// question was asked, and a restart at the same address is another server.
+			model.abandonActions()
 		}
 		.onChange(of: model.connection) { _, connection in
 			guard case .disconnected = connection else { return }
@@ -69,15 +78,32 @@ struct StackView: View {
 		.task(id: ServerInputs(address: address, plan: launchPlan)) {
 			await server.use(address: address, plan: launchPlan)
 		}
-		.sheet(isPresented: $isSettingUpServer) { ServerSetupSheet() }
+		.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
 		.confirmationDialog(
-			model.stopStackQuestion,
-			isPresented: $model.isConfirmingStopStack
-		) {
-			Button("Stop the stack", role: .destructive) {
-				Task { await model.stopStack() }
+			model.confirmation.map { model.question(for: $0.target) } ?? "",
+			isPresented: isConfirming,
+			presenting: model.confirmation
+		) { confirmation in
+			Button(model.answer(for: confirmation.target), role: confirmation.target.isDestructive ? .destructive : nil) {
+				Task {
+					// Only the server is not this model's to stop.
+					if case .stopServer(let identity) = confirmation.target {
+						await server.stop(expecting: identity)
+					} else {
+						await model.perform(confirmation)
+					}
+				}
 			}
 		}
+	}
+
+	/// The dialog is raised by whatever names a target, and dismissing it clears the
+	/// name rather than leaving a stop the user backed out of pending.
+	private var isConfirming: Binding<Bool> {
+		Binding(
+			get: { model.confirmation != nil },
+			set: { if !$0 { model.confirmation = nil } }
+		)
 	}
 
 	/// The toolbar button and the View menu item both collapse the sidebar, so the
@@ -108,6 +134,11 @@ struct StackView: View {
 					.accessibilityLabel(
 						"\(project.name), \(project.runningCount) of \(project.processCount) running"
 					)
+					.contextMenu {
+						ProjectActions(model: model, project: project.name)
+						Divider()
+						Button("Copy Name") { NSPasteboard.copy(project.name) }
+					}
 			}
 		}
 		.navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 300)
@@ -167,9 +198,6 @@ struct StackView: View {
 
 			Button("Copy MCP URL") { mcpModel.url.map { NSPasteboard.copy($0.absoluteString) } }
 				.disabled(mcpModel.url == nil)
-
-			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(configURLs) }
-				.disabled(configURLs.isEmpty)
 		} label: {
 			statusDot("MCP", color: mcpModel.isReachable ? .green : .secondary, describedBy: help)
 		}
@@ -189,15 +217,18 @@ struct StackView: View {
 			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
-			Button("Stop Server") { Task { await server.stop() } }
+			Button("Stop Server...") { model.ask(.stopServer(identity: server.identity)) }
 				.disabled(!server.isOwned)
 
-			Button("Set Up Server") { isSettingUpServer = true }
+			Button("Set Up Server...") { windowState.isSettingUpServer = true }
 
 			Divider()
 
-			Button("Show Server Log") { isShowingServerLog = true }
-				.disabled(isShowingServerLog)
+			Button("Show Server Log") { windowState.isShowingServerLog = true }
+				.disabled(windowState.isShowingServerLog)
+
+			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
+				.disabled(model.configURLs.isEmpty)
 		} label: {
 			statusDot("Server", color: serverColor, describedBy: help)
 		}
@@ -252,10 +283,6 @@ struct StackView: View {
 		}
 	}
 
-	private var configURLs: [URL] {
-		(model.project?.configFiles ?? []).map { URL(fileURLWithPath: $0) }
-	}
-
 	private var mcpHelp: String {
 		guard let url = mcpModel.url else { return "Settings has no usable MCP port" }
 		return mcpModel.isReachable
@@ -278,7 +305,7 @@ struct StackView: View {
 	}
 
 	private var powerTitle: String {
-		model.power == .canStop ? "Stop Stack" : "Start Stack"
+		model.power == .canStop ? "Stop Stack..." : "Start Stack"
 	}
 
 	@ViewBuilder
@@ -292,7 +319,7 @@ struct StackView: View {
 					.font(.callout)
 			} actions: {
 				if server.state == .unconfigured {
-					Button("Set Up Server") { isSettingUpServer = true }
+					Button("Set Up Server...") { windowState.isSettingUpServer = true }
 				} else {
 					Button("Start Server") { Task { await server.start() } }
 						.disabled(!server.canStart)
@@ -329,6 +356,8 @@ struct StackView: View {
 			state: state,
 			kind: kind,
 			isBusy: model.isBusy(name),
+			canStart: model.canStart(name),
+			canStop: model.canStop(name),
 			start: start,
 			stop: stop,
 			restart: restart
@@ -455,7 +484,7 @@ struct StackView: View {
 		}
 
 		let client = LiveProcessComposeClient(address: address)
-		model.use(client)
+		model.use(client, at: address)
 		logModel.use(client)
 	}
 }

@@ -5,20 +5,31 @@ public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 	public let workingDir: String?
 	public let hasWatcher: Bool
 	public let restartsAutomatically: Bool
+	/// The processes process-compose starts before this one.
+	public let dependsOn: [String]
 
-	public init(workingDir: String?, hasWatcher: Bool = false, restartsAutomatically: Bool = false) {
+	public init(
+		workingDir: String?,
+		hasWatcher: Bool = false,
+		restartsAutomatically: Bool = false,
+		dependsOn: [String] = []
+	) {
 		self.workingDir = workingDir
 		self.hasWatcher = hasWatcher
 		self.restartsAutomatically = restartsAutomatically
+		self.dependsOn = dependsOn
 	}
 
 	enum CodingKeys: String, CodingKey {
-		case workingDir, watch, restartPolicy
+		case workingDir, watch, restartPolicy, dependsOn
 	}
 
 	private struct RestartPolicy: Decodable {
 		let restart: Int?
 	}
+
+	/// Only the names are read; what each dependency waits for does not change who starts.
+	private struct Condition: Decodable {}
 
 	public init(from decoder: any Decoder) throws {
 		let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -28,6 +39,8 @@ public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 		// for the default, so any value at all means the process is kept alive.
 		let policy = try c.decodeIfPresent(RestartPolicy.self, forKey: .restartPolicy)
 		restartsAutomatically = (policy?.restart ?? 0) != 0
+		dependsOn = try c.decodeIfPresent([String: Condition].self, forKey: .dependsOn)
+			.map { $0.keys.sorted() } ?? []
 	}
 }
 

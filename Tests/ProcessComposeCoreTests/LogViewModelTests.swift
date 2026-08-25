@@ -93,6 +93,57 @@ struct LogViewModelTests {
 
 		#expect(viewModel.lines.first?.spans.first?.color == .green)
 	}
+
+	@Test("shows only the lines holding the filter, whatever their case")
+	func filtersLinesIgnoringCase() async {
+		let client = StubClient()
+		let viewModel = LogViewModel(client: client)
+		viewModel.select("chatbot")
+
+		let session = Task { await viewModel.stream() }
+		client.emitLog(.init(message: "ERROR could not bind", processName: "chatbot"))
+		client.emitLog(.init(message: "listening on 3001", processName: "chatbot"))
+		client.emitLog(.init(message: "error retrying", processName: "chatbot"))
+		client.finishLogStream()
+		await session.value
+		viewModel.filter = "error"
+
+		#expect(viewModel.visibleLines.map(\.text) == ["ERROR could not bind", "error retrying"])
+		#expect(viewModel.lines.count == 3)
+	}
+
+	@Test("shows every line again once the filter is emptied")
+	func showsEverythingWithoutAFilter() async {
+		let client = StubClient()
+		let viewModel = LogViewModel(client: client)
+		viewModel.select("chatbot")
+
+		let session = Task { await viewModel.stream() }
+		client.emitLog(.init(message: "listening on 3001", processName: "chatbot"))
+		client.finishLogStream()
+		await session.value
+		viewModel.filter = ""
+
+		#expect(viewModel.visibleLines.map(\.text) == ["listening on 3001"])
+	}
+
+	@Test("says how much of the buffer a filter is hiding")
+	func describesTheFilteredCount() {
+		#expect(LogFilter.countLabel(visible: 12, total: 400, filter: "error") == "12 of 400 lines")
+		#expect(LogFilter.countLabel(visible: 400, total: 400, filter: "") == "400 lines")
+	}
+
+	@Test("drops the filter when another process is selected")
+	func clearsFilterOnSelectionChange() async {
+		let client = StubClient()
+		let viewModel = LogViewModel(client: client)
+		viewModel.select("chatbot")
+		viewModel.filter = "error"
+
+		viewModel.select("api")
+
+		#expect(viewModel.filter == "")
+	}
 }
 
 @MainActor

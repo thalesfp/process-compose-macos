@@ -7,6 +7,8 @@ struct ProcessRow: View {
 	let state: ProcessState
 	let kind: ProcessKind
 	let isBusy: Bool
+	let canStart: Bool
+	let canStop: Bool
 	let start: () -> Void
 	let stop: () -> Void
 	let restart: () -> Void
@@ -129,15 +131,15 @@ struct ProcessRow: View {
 		} else {
 			HStack(spacing: 2) {
 				Button(action: start) { Image(systemName: "play.fill") }
-					.disabled(!state.canStart)
+					.disabled(!canStart)
 					.help("Start")
 					.accessibilityLabel("Start \(state.name)")
 				Button(action: restart) { Image(systemName: "arrow.clockwise") }
-					.disabled(!state.canStop)
+					.disabled(!canStop)
 					.help("Restart")
 					.accessibilityLabel("Restart \(state.name)")
 				Button(action: stop) { Image(systemName: "stop.fill") }
-					.disabled(!state.canStop)
+					.disabled(!canStop)
 					.help("Stop")
 					.accessibilityLabel("Stop \(state.name)")
 			}
