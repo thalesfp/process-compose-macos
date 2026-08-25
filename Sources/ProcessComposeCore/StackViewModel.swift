@@ -529,7 +529,7 @@ public final class StackViewModel {
 		observation mine: Int,
 		epoch: Int
 	) async -> Bool {
-		let loaded = await loadConfigurations(for: names, from: client)
+		let loaded = await ConfigurationReader.configurations(for: names, from: client)
 
 		// Nothing this read found is published once the work it was for has been abandoned,
 		// or the sidebar could be moved by an action that is about to be refused anyway.
@@ -582,7 +582,7 @@ public final class StackViewModel {
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
 
 			async let state = try? await client.projectState()
-			async let loaded = loadConfigurations(for: snapshot.map(\.name), from: client)
+			async let loaded = ConfigurationReader.configurations(for: snapshot.map(\.name), from: client)
 			let loadedProject = await state
 			let loadedConfigurations = await loaded
 			guard isCurrent(mine) else { return }
@@ -700,53 +700,12 @@ public final class StackViewModel {
 	/// which leaves it in no project. Project actions are withheld from the moment it
 	/// appears until it has been placed.
 	private func adopt(_ name: String, observation mine: Int) async {
-		let loaded = await loadConfigurations(for: [name], from: client)
+		let loaded = await ConfigurationReader.configurations(for: [name], from: client)
 
 		adopting.remove(name)
 
 		guard isCurrent(mine) else { return }
 
 		place(loaded)
-	}
-
-	// A process's configuration is fixed for the life of the project, so this runs
-	// once per connection rather than per state event.
-	private func loadConfigurations(
-		for names: [String],
-		from client: any ProcessComposeClient
-	) async -> [String: ProcessConfiguration] {
-		var loaded = await readConfigurations(for: names, from: client)
-
-		// Each configuration is a request of its own, so a single blip would otherwise keep
-		// a process out of the grouping for the whole connection, with no second chance
-		// until something else forces a reconnect.
-		let unread = names.filter { loaded[$0] == nil }
-
-		guard !unread.isEmpty else { return loaded }
-
-		for (name, configuration) in await readConfigurations(for: unread, from: client) {
-			loaded[name] = configuration
-		}
-
-		return loaded
-	}
-
-	private func readConfigurations(
-		for names: [String],
-		from client: any ProcessComposeClient
-	) async -> [String: ProcessConfiguration] {
-		await withTaskGroup(of: (String, ProcessConfiguration?).self) { group in
-			for name in names {
-				group.addTask {
-					(name, try? await client.configuration(for: name))
-				}
-			}
-
-			var configurations: [String: ProcessConfiguration] = [:]
-			for await (name, configuration) in group {
-				configurations[name] = configuration
-			}
-			return configurations
-		}
 	}
 }
