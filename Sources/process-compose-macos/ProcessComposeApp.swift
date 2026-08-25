@@ -13,7 +13,6 @@ struct ProcessComposeApp: App {
 	@State private var logModel = LogViewModel(client: client)
 	@State private var mcpModel = MCPServerViewModel()
 	@State private var server = ProcessComposeApp.server
-	@State private var windowState = WindowState()
 
 	@AppStorage(PreferenceKey.logFontSize) private var logFontSize = LogFont.standard
 
@@ -23,8 +22,7 @@ struct ProcessComposeApp: App {
 				model: model,
 				logModel: logModel,
 				mcpModel: mcpModel,
-				server: server,
-				windowState: windowState
+				server: server
 			)
 			.frame(minWidth: 900, minHeight: 480)
 		}
@@ -35,7 +33,6 @@ struct ProcessComposeApp: App {
 				model: model,
 				logModel: logModel,
 				server: server,
-				windowState: windowState,
 				logFontSize: $logFontSize
 			)
 		}

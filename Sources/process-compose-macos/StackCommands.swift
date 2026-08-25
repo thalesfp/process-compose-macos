@@ -8,8 +8,9 @@ struct StackCommands: Commands {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
 	let server: ServerSupervisor
-	let windowState: WindowState
 	@Binding var logFontSize: Double
+
+	@FocusedValue(\.windowState) private var windowState: WindowState?
 
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 	@AppStorage(PreferenceKey.splitFraction) private var splitFraction = PreferenceDefault.splitFraction
@@ -95,12 +96,13 @@ struct StackCommands: Commands {
 
 			Divider()
 
-			Button("Set Up Server...") { windowState.isSettingUpServer = true }
+			Button("Set Up Server...") { windowState?.isSettingUpServer = true }
 				.keyboardShortcut("s", modifiers: [.command, .option])
+				.disabled(windowState == nil)
 
-			Button("Show Server Log") { windowState.isShowingServerLog = true }
+			Button("Show Server Log") { windowState?.isShowingServerLog = true }
 				.keyboardShortcut("l", modifiers: [.command, .option])
-				.disabled(windowState.isShowingServerLog)
+				.disabled(windowState?.isShowingServerLog ?? true)
 
 			Divider()
 
@@ -109,8 +111,9 @@ struct StackCommands: Commands {
 		}
 
 		CommandMenu("Log") {
-			Button("Filter Log") { windowState.filterFocusToken += 1 }
+			Button("Filter Log") { windowState?.filterFocusToken += 1 }
 				.keyboardShortcut("f", modifiers: .command)
+				.disabled(windowState == nil)
 
 			Divider()
 

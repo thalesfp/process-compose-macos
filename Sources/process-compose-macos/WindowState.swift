@@ -1,4 +1,5 @@
 import Observation
+import SwiftUI
 
 /// The flags the window and the menu bar both act on. A SwiftUI `Commands` body sits
 /// outside the view tree, so a menu item cannot reach a view's `@State`.
@@ -11,4 +12,16 @@ final class WindowState {
 	/// Bumped by the Log menu to put the keyboard in whichever pane's filter field is
 	/// on screen. Only the visible pane is built, so only it answers.
 	var filterFocusToken = 0
+}
+
+/// Each window owns its own, and the menu bar acts on whichever one is focused.
+private struct WindowStateKey: FocusedValueKey {
+	typealias Value = WindowState
+}
+
+extension FocusedValues {
+	var windowState: WindowState? {
+		get { self[WindowStateKey.self] }
+		set { self[WindowStateKey.self] = newValue }
+	}
 }

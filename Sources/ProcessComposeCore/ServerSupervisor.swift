@@ -68,7 +68,6 @@ public final class ServerSupervisor {
 	private let grace: Duration
 	private let owner: ServerOwner
 
-	private var server: (any ServerProcess)?
 	private var watchTask: Task<Void, Never>?
 	private var stopTask: Task<Void, Never>?
 	private var launchTask: Task<Void, Never>?
@@ -81,9 +80,18 @@ public final class ServerSupervisor {
 	private var address: ServerAddress?
 	private var generation = 0
 
-	/// Changes whenever the supervisor is pointed at a different server or starts one, so a
-	/// question asked about one server is never answered about the next.
+	/// Changes whenever the server this represents changes: a different address or plan, and
+	/// every time the concrete server behind it is replaced or goes. A question asked about
+	/// one server is never answered about the next.
 	public private(set) var identity = 0
+
+	private var server: (any ServerProcess)? {
+		didSet {
+			guard oldValue !== server else { return }
+
+			identity += 1
+		}
+	}
 
 	public init(
 		runner: any ServerRunner = LiveServerRunner(),

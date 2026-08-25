@@ -73,6 +73,25 @@ struct ServerSupervisorTests {
 		#expect(supervisor.identity == first)
 	}
 
+	@Test("takes a new identity when the server behind it is replaced")
+	func changesIdentityWhenTheServerIsReplaced() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let running = supervisor.identity
+
+		// The server going is itself a change: `stop` does not bump the counter on its own,
+		// so only tracking the concrete server catches this.
+		await supervisor.stop()
+
+		#expect(supervisor.identity != running)
+	}
+
 	@Test("takes back the server an earlier run left behind")
 	func adoptsRecordedServer() async {
 		let runner = FakeRunner()

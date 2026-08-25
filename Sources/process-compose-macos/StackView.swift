@@ -7,7 +7,8 @@ struct StackView: View {
 	@Bindable var logModel: LogViewModel
 	let mcpModel: MCPServerViewModel
 	let server: ServerSupervisor
-	@Bindable var windowState: WindowState
+
+	@State private var windowState = WindowState()
 
 	@Environment(\.accessibilityReduceMotion) private var reduceMotion
 	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
@@ -44,6 +45,7 @@ struct StackView: View {
 			.overlay(alignment: .bottom) { errorBar }
 			.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
 		}
+		.focusedSceneValue(\.windowState, windowState)
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
