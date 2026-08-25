@@ -37,7 +37,9 @@ struct StackCommands: Commands {
 			Divider()
 		}
 
-		CommandMenu("Process") {
+		// One menu that widens as it is read: the selected process, then its project,
+		// then every project the server is running.
+		CommandMenu("Stack") {
 			Button(title("Start")) { run(model.startProcess) }
 				.keyboardShortcut("r", modifiers: .command)
 				.disabled(!model.canStart(model.selection))
@@ -49,6 +51,14 @@ struct StackCommands: Commands {
 			Button(title("Stop")) { run(model.stopProcess) }
 				.keyboardShortcut(".", modifiers: .command)
 				.disabled(!model.canStop(model.selection))
+
+			Divider()
+
+			Button(projectTitle("Start All")) { runOnProject(model.startProject) }
+				.disabled(!projectAction(model.canStartProject))
+
+			Button(projectTitle("Stop All") + "...") { model.selectedProject.map { model.stopTarget = .project($0) } }
+				.disabled(!projectAction(model.canStopProject))
 
 			Divider()
 
@@ -103,6 +113,19 @@ struct StackCommands: Commands {
 
 	private func title(_ verb: String) -> String {
 		model.selection.map { "\(verb) \($0)" } ?? verb
+	}
+
+	private func projectTitle(_ verb: String) -> String {
+		model.selectedProject.map { "\(verb) in \($0)" } ?? verb
+	}
+
+	private func projectAction(_ predicate: (String) -> Bool) -> Bool {
+		model.selectedProject.map(predicate) ?? false
+	}
+
+	private func runOnProject(_ action: @escaping (String) async -> Void) {
+		guard let name = model.selectedProject else { return }
+		Task { await action(name) }
 	}
 
 	private func run(_ action: @escaping (String) async -> Void) {

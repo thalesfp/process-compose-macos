@@ -7,6 +7,13 @@ public enum StackPower: Sendable, Equatable {
 	case unavailable
 }
 
+/// What a stop is being asked about. The whole stack and a single project confirm
+/// through the same question, so only one can ever be in flight.
+public enum StopTarget: Sendable, Equatable {
+	case everything
+	case project(String)
+}
+
 public enum ConnectionState: Sendable, Equatable {
 	case connecting
 	case connected
@@ -26,9 +33,9 @@ public final class StackViewModel {
 	/// The project the sidebar has selected.
 	public private(set) var selectedProject: String?
 
-	/// Whether the window is asking the user to confirm stopping every process. Owned
-	/// here because both the toolbar button and the menu bar item raise it.
-	public var isConfirmingStopStack = false
+	/// What the window is asking the user to confirm stopping, if anything. Owned here
+	/// because the toolbar button, the menu bar and the sidebar all raise it.
+	public var stopTarget: StopTarget?
 
 	public private(set) var isChangingStack = false
 
@@ -53,12 +60,27 @@ public final class StackViewModel {
 
 	/// The power button reaches the whole stack while the window shows one project, so
 	/// the confirmation says how far the stop goes.
-	public var stopStackQuestion: String {
-		let count = runningProcesses.count
-		let label = count == 1 ? "1 running process" : "\(count) running processes"
-		let projectCount = projects.filter { $0.runningCount > 0 }.count
+	public func stopQuestion(for target: StopTarget) -> String {
+		switch target {
+		case .everything:
+			let projectCount = projects.filter { $0.runningCount > 0 }.count
+			let label = Self.runningLabel(runningProcesses.count)
 
-		return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
+			return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
+		case .project(let name):
+			return "Stop \(Self.runningLabel(stoppableProcesses(in: name).count)) in \(name)?"
+		}
+	}
+
+	public func stopConfirmation(for target: StopTarget) -> String {
+		switch target {
+		case .everything: "Stop the stack"
+		case .project(let name): "Stop \(name)"
+		}
+	}
+
+	private static func runningLabel(_ count: Int) -> String {
+		count == 1 ? "1 running process" : "\(count) running processes"
 	}
 
 	/// Stopping the server takes every process with it, whichever project the window
@@ -75,7 +97,7 @@ public final class StackViewModel {
 	/// Stopping asks first because it is destructive; starting does not.
 	public func togglePower() {
 		switch power {
-		case .canStop: isConfirmingStopStack = true
+		case .canStop: stopTarget = .everything
 		case .canStart: Task { await startStack() }
 		case .unavailable: break
 		}
@@ -244,6 +266,47 @@ public final class StackViewModel {
 		await applyToStack(runningProcesses.map(\.name), failureVerb: "stop") {
 			try await self.client.stop($0)
 		}
+	}
+
+	public func stop(_ target: StopTarget) async {
+		switch target {
+		case .everything: await stopStack()
+		case .project(let name): await stopProject(name)
+		}
+	}
+
+	/// Starts a single project's processes, leaving every other project alone. The
+	/// config's disabled processes stay off, as they do for the whole stack.
+	public func startProject(_ name: String) async {
+		await applyToStack(startableProcesses(in: name).map(\.name), failureVerb: "start") {
+			try await self.client.start($0)
+		}
+	}
+
+	public func stopProject(_ name: String) async {
+		await applyToStack(stoppableProcesses(in: name).map(\.name), failureVerb: "stop") {
+			try await self.client.stop($0)
+		}
+	}
+
+	public func canStartProject(_ name: String) -> Bool {
+		connection == .connected && !isChangingStack && !startableProcesses(in: name).isEmpty
+	}
+
+	public func canStopProject(_ name: String) -> Bool {
+		connection == .connected && !isChangingStack && !stoppableProcesses(in: name).isEmpty
+	}
+
+	private func processes(in project: String) -> [ProcessState] {
+		projects.first { $0.name == project }?.processes ?? []
+	}
+
+	private func startableProcesses(in project: String) -> [ProcessState] {
+		processes(in: project).filter { $0.canStart && $0.status != .disabled }
+	}
+
+	private func stoppableProcesses(in project: String) -> [ProcessState] {
+		processes(in: project).filter(\.canStop)
 	}
 
 	// One process at a time: process-compose brings up a process's dependencies with it,

@@ -69,11 +69,12 @@ struct StackView: View {
 		}
 		.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
 		.confirmationDialog(
-			model.stopStackQuestion,
-			isPresented: $model.isConfirmingStopStack
-		) {
-			Button("Stop the stack", role: .destructive) {
-				Task { await model.stopStack() }
+			model.stopTarget.map(model.stopQuestion) ?? "",
+			isPresented: isConfirmingStop,
+			presenting: model.stopTarget
+		) { target in
+			Button(model.stopConfirmation(for: target), role: .destructive) {
+				Task { await model.stop(target) }
 			}
 		}
 		.confirmationDialog(
@@ -84,6 +85,15 @@ struct StackView: View {
 				Task { await server.stop() }
 			}
 		}
+	}
+
+	/// The dialog is raised by whatever names a target, and dismissing it clears the
+	/// name rather than leaving a stop the user backed out of pending.
+	private var isConfirmingStop: Binding<Bool> {
+		Binding(
+			get: { model.stopTarget != nil },
+			set: { if !$0 { model.stopTarget = nil } }
+		)
 	}
 
 	/// The toolbar button and the View menu item both collapse the sidebar, so the
@@ -114,9 +124,25 @@ struct StackView: View {
 					.accessibilityLabel(
 						"\(project.name), \(project.runningCount) of \(project.processCount) running"
 					)
+					.contextMenu { projectActions(for: project.name) }
 			}
 		}
 		.navigationSplitViewColumnWidth(min: 160, ideal: 180, max: 300)
+	}
+
+	/// The sidebar's context menu and the Stack menu offer the same project actions, so
+	/// the two can never disagree about what a project can do.
+	@ViewBuilder
+	private func projectActions(for name: String) -> some View {
+		Button("Start All in \(name)") { Task { await model.startProject(name) } }
+			.disabled(!model.canStartProject(name))
+
+		Button("Stop All in \(name)...") { model.stopTarget = .project(name) }
+			.disabled(!model.canStopProject(name))
+
+		Divider()
+
+		Button("Copy Name") { NSPasteboard.copy(name) }
 	}
 
 	@ToolbarContentBuilder

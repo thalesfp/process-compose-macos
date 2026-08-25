@@ -360,7 +360,7 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.stopStackQuestion == "Stop 2 running processes across 2 projects?")
+		#expect(viewModel.stopQuestion(for: .everything) == "Stop 2 running processes across 2 projects?")
 	}
 
 	@Test("asks about the processes alone when one project has all of them")
@@ -373,7 +373,72 @@ struct StackViewModelTests {
 		client.finishStream()
 		await viewModel.observe()
 
-		#expect(viewModel.stopStackQuestion == "Stop 1 running process?")
+		#expect(viewModel.stopQuestion(for: .everything) == "Stop 1 running process?")
+	}
+
+	@Test("asks only about the project a stop names")
+	func asksAboutOneProjectAlone() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+
+		await viewModel.observe()
+
+		#expect(viewModel.stopQuestion(for: .project("acme")) == "Stop 2 running processes in acme?")
+	}
+
+	@Test("stops only the processes of the project it was given")
+	func stopsOneProjectOnly() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+
+		await viewModel.stop(.project("acme"))
+
+		#expect(client.stopped == ["api"])
+	}
+
+	@Test("starts only the processes of the project it was given, leaving disabled ones off")
+	func startsOneProjectOnly() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "seed", namespace: "api", status: .disabled, isRunning: false),
+			.init(name: "chatbot", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "seed": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+		await viewModel.observe()
+
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["api"])
+	}
+
+	@Test("offers no project actions once the server is gone")
+	func offersNoProjectActionsWhileDisconnected() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "chatbot": "acme-ai-chatbot"]
+		let viewModel = StackViewModel(client: client)
+		client.finishStream()
+
+		await viewModel.observe()
+
+		#expect(!viewModel.canStopProject("acme"))
+		#expect(!viewModel.canStartProject("acme-ai-chatbot"))
 	}
 
 	@Test("names every running process when asked to stop the server")
