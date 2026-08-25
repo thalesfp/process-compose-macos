@@ -32,9 +32,13 @@ struct StackView: View {
 				content
 			} bottom: {
 				if windowState.isShowingServerLog {
-					ServerLogPane(log: server.log, status: serverStatus) { windowState.isShowingServerLog = false }
+					ServerLogPane(
+						log: server.log,
+						status: serverStatus,
+						windowState: windowState
+					) { windowState.isShowingServerLog = false }
 				} else {
-					LogPane(model: logModel)
+					LogPane(model: logModel, windowState: windowState)
 				}
 			}
 			.overlay(alignment: .bottom) { errorBar }

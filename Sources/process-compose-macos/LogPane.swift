@@ -3,8 +3,11 @@ import SwiftUI
 
 struct LogPane: View {
 	@Bindable var model: LogViewModel
+	let windowState: WindowState
 
 	@AppStorage(PreferenceKey.logFontSize) private var fontSize = LogFont.standard
+
+	@FocusState private var isFilterFocused: Bool
 
 	var body: some View {
 		VStack(spacing: 0) {
@@ -12,6 +15,7 @@ struct LogPane: View {
 			Divider()
 			output
 		}
+		.onChange(of: windowState.filterFocusToken) { isFilterFocused = true }
 	}
 
 	private var header: some View {
@@ -42,7 +46,9 @@ struct LogPane: View {
 					.lineLimit(1)
 			}
 
-			Text("\(model.lines.count) lines")
+			LogFilterField(text: $model.filter, isFocused: $isFilterFocused)
+
+			Text(countLabel)
 				.font(.caption.monospacedDigit())
 				.foregroundStyle(.secondary)
 
@@ -59,13 +65,37 @@ struct LogPane: View {
 		.padding(.vertical, 7)
 	}
 
+	private var countLabel: String {
+		model.filter.isEmpty
+			? "\(model.lines.count) lines"
+			: "\(model.visibleLines.count) of \(model.lines.count) lines"
+	}
+
 	@ViewBuilder
 	private var output: some View {
 		if model.selected == nil {
 			LogPlaceholder("Select a process to read its output")
+		} else if model.visibleLines.isEmpty, !model.filter.isEmpty {
+			LogPlaceholder("No lines match \"\(model.filter)\"")
 		} else {
-			LogTextView(lines: model.lines, fontSize: fontSize, isFollowing: model.isFollowing)
+			LogTextView(lines: model.visibleLines, fontSize: fontSize, isFollowing: model.isFollowing)
 		}
+	}
+}
+
+/// The filter box both log panes carry.
+struct LogFilterField: View {
+	@Binding var text: String
+	@FocusState.Binding var isFocused: Bool
+
+	var body: some View {
+		TextField("Filter", text: $text)
+			.textFieldStyle(.roundedBorder)
+			.controlSize(.small)
+			.font(.caption)
+			.frame(width: 160)
+			.focused($isFocused)
+			.accessibilityLabel("Filter the log")
 	}
 }
 

@@ -98,6 +98,11 @@ struct StackCommands: Commands {
 		}
 
 		CommandMenu("Log") {
+			Button("Filter Log") { windowState.filterFocusToken += 1 }
+				.keyboardShortcut("f", modifiers: .command)
+
+			Divider()
+
 			Toggle("Follow", isOn: $logModel.isFollowing)
 				.keyboardShortcut("f", modifiers: [.command, .shift])
 
