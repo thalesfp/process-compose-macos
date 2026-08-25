@@ -295,7 +295,9 @@ public final class StackViewModel {
 	public func startStack() async {
 		guard canChangePower else { return refuse("start", "the stack") }
 
-		await applyToStack(startableProcesses.map(\.name), failureVerb: "start") {
+		let ordered = inDependencyOrder(startableProcesses.map(\.name))
+
+		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: false), failureVerb: "start") {
 			try await self.client.start($0)
 		}
 	}
@@ -303,7 +305,9 @@ public final class StackViewModel {
 	public func stopStack() async {
 		guard canChangePower else { return refuse("stop", "the stack") }
 
-		await applyToStack(runningProcesses.map(\.name), failureVerb: "stop") {
+		let ordered = inDependencyOrder(runningProcesses.map(\.name)).reversed().map { $0 }
+
+		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: true), failureVerb: "stop") {
 			try await self.client.stop($0)
 		}
 	}
@@ -363,7 +367,9 @@ public final class StackViewModel {
 	public func startProject(_ name: String) async {
 		guard canStartProject(name) else { return refuse("start", name) }
 
-		await applyToStack(startableProcesses(in: name).map(\.name), failureVerb: "start") {
+		let ordered = inDependencyOrder(startableProcesses(in: name).map(\.name))
+
+		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: false), failureVerb: "start") {
 			try await self.client.start($0)
 		}
 	}
@@ -371,7 +377,9 @@ public final class StackViewModel {
 	public func stopProject(_ name: String) async {
 		guard canStopProject(name) else { return refuse("stop", name) }
 
-		await applyToStack(stoppableProcesses(in: name).map(\.name), failureVerb: "stop") {
+		let ordered = inDependencyOrder(stoppableProcesses(in: name).map(\.name)).reversed().map { $0 }
+
+		await applyToStack(ordered, blockedBy: blockers(among: ordered, stopping: true), failureVerb: "stop") {
 			try await self.client.stop($0)
 		}
 	}
@@ -410,10 +418,32 @@ public final class StackViewModel {
 		processes(in: project).filter(\.canStop)
 	}
 
-	// One process at a time: process-compose brings up a process's dependencies with it,
-	// so firing the whole list at once reports the dependencies as already running.
+	/// Prerequisites first. Asking the server to start a process starts that one alone, so
+	/// a bulk action has to send them in an order that stands up on its own; a stop takes
+	/// the same order backwards. A dependency cycle keeps whatever order it is walked in.
+	private func inDependencyOrder(_ names: [String]) -> [String] {
+		let wanted = Set(names)
+		var ordered: [String] = []
+		var seen: Set<String> = []
+
+		func visit(_ name: String) {
+			guard wanted.contains(name), seen.insert(name).inserted else { return }
+
+			for dependency in configurations[name]?.dependsOn ?? [] { visit(dependency) }
+
+			ordered.append(name)
+		}
+
+		for name in names { visit(name) }
+
+		return ordered
+	}
+
+	// One process at a time, in the order given: the server starts only the process it is
+	// asked for, so firing the whole list at once would race their dependencies.
 	private func applyToStack(
 		_ names: [String],
+		blockedBy: [String: Set<String>] = [:],
 		failureVerb: String,
 		_ operation: (String) async throws -> Void
 	) async {
@@ -423,8 +453,17 @@ public final class StackViewModel {
 		defer { isChangingStack = false }
 
 		var failures: [String] = []
+		var skipped: [String] = []
 
 		for name in names {
+			// Ordering only holds while everything before it worked: a process whose
+			// prerequisite never started would come up without it.
+			if let blockers = blockedBy[name],
+				!blockers.isDisjoint(with: Set(failures).union(skipped)) {
+				skipped.append(name)
+				continue
+			}
+
 			busy.insert(name)
 			do {
 				try await operation(name)
@@ -434,9 +473,35 @@ public final class StackViewModel {
 			busy.remove(name)
 		}
 
-		lastError = failures.isEmpty
-			? nil
-			: "Could not \(failureVerb) \(failures.joined(separator: ", "))"
+		var trouble: [String] = []
+
+		if !failures.isEmpty {
+			trouble.append("Could not \(failureVerb) \(failures.joined(separator: ", "))")
+		}
+		if !skipped.isEmpty {
+			trouble.append("did not \(failureVerb) \(skipped.joined(separator: ", "))")
+		}
+
+		lastError = trouble.isEmpty ? nil : trouble.joined(separator: "; ")
+	}
+
+	/// What must not be acted on once something else has failed: for a start, whatever a
+	/// process depends on; for a stop, whatever depends on it.
+	private func blockers(among names: [String], stopping: Bool) -> [String: Set<String>] {
+		let wanted = Set(names)
+		var blockers: [String: Set<String>] = [:]
+
+		for name in names {
+			for dependency in configurations[name]?.dependsOn ?? [] where wanted.contains(dependency) {
+				if stopping {
+					blockers[dependency, default: []].insert(name)
+				} else {
+					blockers[name, default: []].insert(dependency)
+				}
+			}
+		}
+
+		return blockers
 	}
 
 	public func dismissError() {

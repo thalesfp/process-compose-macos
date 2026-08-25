@@ -674,6 +674,94 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("starts what a process depends on before the process itself")
+	func startsInDependencyOrder() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["worker", "api"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops a process before the one it depends on")
+	func stopsInReverseDependencyOrder() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped == ["api", "worker"])
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not start what a failed prerequisite was needed for")
+	func skipsDependentsOfAFailedStart() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .completed, isRunning: false),
+			.init(name: "worker", namespace: "api", status: .completed, isRunning: false),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		client.refusingProcesses = ["worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.startProject("acme")
+
+		#expect(client.started == ["worker"])
+		#expect(viewModel.lastError == "Could not start worker; did not start api")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("does not stop what a process that would not stop still depends on")
+	func skipsPrerequisitesOfAFailedStop() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		client.dependencies = ["api": ["worker"]]
+		client.refusingProcesses = ["api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		await viewModel.stopProject("acme")
+
+		#expect(client.stopped == ["api"])
+		#expect(viewModel.lastError == "Could not stop api; did not stop worker")
+
+		client.finishStream()
+		await session.value
+	}
+
 	@Test("does not ask when the dependency it needs is already up")
 	func doesNotAskAboutADependencyAlreadyRunning() async {
 		let client = StubClient(processes: [
@@ -813,9 +901,11 @@ struct StackViewModelTests {
 		let group = Task { await viewModel.perform(.stopStack) }
 		await settle(until: { viewModel.isChangingStack })
 
-		await viewModel.stopProcess("worker")
+		// A process the group has not reached yet, so the refusal is the group action's
+		// doing rather than that one process already being busy.
+		await viewModel.stopProcess("api")
 
-		#expect(client.stopped == ["api"])
+		#expect(client.stopped == ["worker"])
 
 		client.holdActions = false
 		await group.value
