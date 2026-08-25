@@ -1235,7 +1235,7 @@ struct StackViewModelTests {
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
 
-		#expect(viewModel.question(for: .stopServer) == "Stop the server and 2 running processes?")
+		#expect(viewModel.question(for: .stopServer(identity: 0)) == "Stop the server and 2 running processes?")
 
 		client.finishStream()
 		await session.value
@@ -1248,7 +1248,7 @@ struct StackViewModelTests {
 
 		await viewModel.observe()
 
-		#expect(viewModel.question(for: .stopServer) == "Stop the server and every process it is running?")
+		#expect(viewModel.question(for: .stopServer(identity: 0)) == "Stop the server and every process it is running?")
 	}
 
 	@Test("asks about the server alone when nothing is running")
@@ -1261,7 +1261,7 @@ struct StackViewModelTests {
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
 
-		#expect(viewModel.question(for: .stopServer) == "Stop the server?")
+		#expect(viewModel.question(for: .stopServer(identity: 0)) == "Stop the server?")
 
 		client.finishStream()
 		await session.value

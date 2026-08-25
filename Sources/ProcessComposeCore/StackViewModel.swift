@@ -12,7 +12,8 @@ public enum StackPower: Sendable, Equatable {
 public enum ConfirmTarget: Sendable, Equatable {
 	case stopStack
 	case stopProject(String)
-	case stopServer
+	/// Carries the server the question was asked about, so the answer cannot land on another.
+	case stopServer(identity: Int)
 	case startProject(String)
 
 	/// Starting is the only one of these that does not take something away.

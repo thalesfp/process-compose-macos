@@ -81,6 +81,10 @@ public final class ServerSupervisor {
 	private var address: ServerAddress?
 	private var generation = 0
 
+	/// Changes whenever the supervisor is pointed at a different server or starts one, so a
+	/// question asked about one server is never answered about the next.
+	public private(set) var identity = 0
+
 	public init(
 		runner: any ServerRunner = LiveServerRunner(),
 		reachability: any ServerReachability = LiveServerReachability(),
@@ -98,6 +102,14 @@ public final class ServerSupervisor {
 		self.log = log
 		self.grace = grace
 		self.owner = owner
+	}
+
+	/// Stops the server the caller was looking at, and nothing else. Both this and `stop`
+	/// run on the main actor, so nothing can point the supervisor elsewhere in between.
+	public func stop(expecting identity: Int) async {
+		guard identity == self.identity else { return }
+
+		await stop()
 	}
 
 	public var isOwned: Bool {
@@ -134,6 +146,7 @@ public final class ServerSupervisor {
 		}
 
 		generation += 1
+		identity += 1
 		let mine = generation
 		useToken += 1
 		let token = useToken
@@ -213,6 +226,7 @@ public final class ServerSupervisor {
 		guard let plan, canStart else { return }
 
 		generation += 1
+		identity += 1
 
 		await launch(plan, generation: generation)
 	}
@@ -223,6 +237,7 @@ public final class ServerSupervisor {
 		guard state == .running(owned: false), let address else { return }
 
 		generation += 1
+		identity += 1
 		let mine = generation
 
 		let presence = await reachability.look(at: address)

@@ -20,6 +20,43 @@ struct ServerSupervisorTests {
 		#expect(runner.launched.isEmpty)
 	}
 
+	@Test("takes a new identity when it is pointed at another server")
+	func changesIdentityWhenRepointed() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let first = supervisor.identity
+
+		await supervisor.use(address: ServerAddress(host: "localhost", port: 28099), plan: .test)
+
+		#expect(supervisor.identity != first)
+	}
+
+	@Test("stops nothing when the server it was asked about is no longer the one it holds")
+	func refusesToStopAServerItWasNotAskedAbout() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let stale = supervisor.identity - 1
+
+		await supervisor.stop(expecting: stale)
+
+		#expect(supervisor.state == .running(owned: true))
+
+		await supervisor.stop(expecting: supervisor.identity)
+
+		#expect(supervisor.state != .running(owned: true))
+	}
+
 	@Test("takes back the server an earlier run left behind")
 	func adoptsRecordedServer() async {
 		let runner = FakeRunner()

@@ -63,6 +63,11 @@ struct StackView: View {
 			ServerLaunchPlan.learnedConfiguration(from: files, current: configPath)
 				.map { suggestedConfig = $0 }
 		}
+		.onChange(of: server.identity) {
+			// A stop the user agreed to was agreed for the server that was there when they
+			// were asked, so pointing the app at another one withdraws the question.
+			if case .stopServer = model.confirmTarget { model.confirmTarget = nil }
+		}
 		.onChange(of: model.connection) { _, connection in
 			guard case .disconnected = connection else { return }
 			Task { await server.recheck() }
@@ -80,8 +85,8 @@ struct StackView: View {
 			Button(model.confirmation(for: target), role: target.isDestructive ? .destructive : nil) {
 				Task {
 					// Only the server is not this model's to stop.
-					if case .stopServer = target {
-						await server.stop()
+					if case .stopServer(let identity) = target {
+						await server.stop(expecting: identity)
 					} else {
 						await model.perform(target)
 					}
@@ -210,7 +215,7 @@ struct StackView: View {
 			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { model.confirmTarget = .stopServer }
+			Button("Stop Server...") { model.confirmTarget = .stopServer(identity: server.identity) }
 				.disabled(!server.isOwned)
 
 			Button("Set Up Server...") { windowState.isSettingUpServer = true }
