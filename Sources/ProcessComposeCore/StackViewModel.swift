@@ -7,33 +7,10 @@ public enum StackPower: Sendable, Equatable {
 	case unavailable
 }
 
-/// What the window is asking the user to confirm. Every question goes through one
-/// target, so only one can ever be in flight.
-public enum ConfirmTarget: Sendable, Equatable {
-	case stopStack(promised: [String])
-	case stopProject(String, promised: [String])
-	/// Carries the server the question was asked about, so the answer cannot land on another.
-	case stopServer(identity: Int)
-	case startProject(String, missing: [String])
-
-	/// Starting is the only one of these that does not take something away.
-	public var isDestructive: Bool {
-		if case .startProject = self { return false }
-		return true
-	}
-}
-
 public enum ConnectionState: Sendable, Equatable {
 	case connecting
 	case connected
 	case disconnected(reason: String)
-}
-
-/// A question and the moment it was asked. An answer captured before the work was
-/// abandoned cannot be acted on afterwards.
-public struct Confirmation: Sendable, Equatable {
-	public let target: ConfirmTarget
-	let epoch: Int
 }
 
 @MainActor
@@ -84,46 +61,18 @@ public final class StackViewModel {
 	/// The power button reaches the whole stack while the window shows one project, so
 	/// the confirmation says how far the stop goes.
 	public func question(for target: ConfirmTarget) -> String {
-		switch target {
-		case .stopStack(let promised):
-			// Read from what the question promised, so the words cannot drift from what
-			// answering it will actually do while it sits on screen.
-			let label = Self.runningLabel(promised.count)
-			let projectCount = Set(promised.map { projectsByProcess[$0] ?? ProcessGrouping.ungrouped }).count
+		let running = if case .stopServer = target { runningProcesses.count } else { 0 }
 
-			return projectCount > 1 ? "Stop \(label) across \(projectCount) projects?" : "Stop \(label)?"
-		case .stopProject(let name, let promised):
-			return "Stop \(Self.runningLabel(promised.count)) in \(name)?"
-		case .stopServer:
-			// The server can be ours to stop while the app has no list of what it is
-			// running, and a question that then said nothing was running would understate it.
-			guard connection == .connected else {
-				return "Stop the server and every process it is running?"
-			}
-
-			let count = runningProcesses.count
-
-			return count == 0 ? "Stop the server?" : "Stop the server and \(Self.runningLabel(count))?"
-		case .startProject(let name, let missing):
-			let named = missing.map { "\($0) in \(projectsByProcess[$0] ?? ProcessGrouping.ungrouped)" }
-			let verb = named.count == 1 ? "is" : "are"
-
-			return "\(name) depends on \(named.joined(separator: ", ")), which \(verb) not running. Start \(name) anyway?"
-		}
+		return ConfirmationWording.question(
+			for: target,
+			projectsByProcess: projectsByProcess,
+			isConnected: connection == .connected,
+			runningCount: running
+		)
 	}
 
-	/// What the button that answers the question says.
 	public func answer(for target: ConfirmTarget) -> String {
-		switch target {
-		case .stopStack: "Stop the stack"
-		case .stopProject(let name, _): "Stop \(name)"
-		case .stopServer: "Stop the server"
-		case .startProject(let name, _): "Start \(name)"
-		}
-	}
-
-	private static func runningLabel(_ count: Int) -> String {
-		count == 1 ? "1 running process" : "\(count) running processes"
+		ConfirmationWording.answer(for: target)
 	}
 
 	/// Stopping asks first because it is destructive; starting does not.
@@ -383,31 +332,18 @@ public final class StackViewModel {
 		Task { await startProject(name) }
 	}
 
+	private var graph: DependencyGraph { DependencyGraph(configurations) }
+
 	/// What the project depends on that this start will not bring up. Asking the server to
 	/// start a process starts that process alone: process-compose v1.122.0 does not follow
 	/// `depends_on` for a start, it only waits on the condition and carries on.
 	public func missingDependencies(startingProject project: String) -> [String] {
 		let starting = Set(startableProcesses(in: project).map(\.name))
 
-		return closure(of: Array(starting))
+		return graph.closure(of: Array(starting))
 			.subtracting(starting)
 			.filter { statesByName[$0]?.isRunning != true }
 			.sorted()
-	}
-
-	/// Everything a start would touch: the processes asked for, and whatever they depend
-	/// on, all the way down.
-	private func closure(of names: [String]) -> Set<String> {
-		var reached: Set<String> = []
-		var pending = names
-
-		while let name = pending.popLast() {
-			guard reached.insert(name).inserted else { continue }
-
-			pending.append(contentsOf: configurations[name]?.dependsOn ?? [])
-		}
-
-		return reached
 	}
 
 	/// Starts a single project's processes, leaving every other project alone. The
@@ -495,33 +431,12 @@ public final class StackViewModel {
 		processes(in: project).filter(\.canStop)
 	}
 
-	/// Prerequisites first. Asking the server to start a process starts that one alone, so
-	/// a bulk action has to send them in an order that stands up on its own; a stop takes
-	/// the same order backwards. A dependency cycle keeps whatever order it is walked in.
-	private func inDependencyOrder(_ names: [String]) -> [String] {
-		let wanted = Set(names)
-		var ordered: [String] = []
-		var seen: Set<String> = []
-
-		func visit(_ name: String) {
-			guard wanted.contains(name), seen.insert(name).inserted else { return }
-
-			for dependency in configurations[name]?.dependsOn ?? [] { visit(dependency) }
-
-			ordered.append(name)
-		}
-
-		for name in names { visit(name) }
-
-		return ordered
-	}
+	private static let stackMovedUnderTheRead = "The stack changed while it was being read, so nothing was changed"
 
 	/// One bulk action from end to end. It takes the floor before it does anything that
 	/// waits, so nothing else can slip in behind an await; it re-reads what it is about to
 	/// touch from the server it started on; and it sends the requests in dependency order,
 	/// passing over anything whose prerequisite failed.
-	private static let stackMovedUnderTheRead = "The stack changed while it was being read, so nothing was changed"
-
 	private func applyToStack(
 		stopping: Bool,
 		validate: () -> String? = { nil },
@@ -556,7 +471,9 @@ public final class StackViewModel {
 			return
 		}
 
-		let ordered = inDependencyOrder(select())
+		// One graph for the whole action: ordering and blocking must agree on the edges.
+		let graph = self.graph
+		let ordered = graph.inDependencyOrder(select())
 		let names = stopping ? Array(ordered.reversed()) : ordered
 
 		guard !names.isEmpty else { return }
@@ -568,7 +485,7 @@ public final class StackViewModel {
 			return
 		}
 
-		let blockedBy = blockers(among: names, stopping: stopping)
+		let blockedBy = graph.blockers(among: names, stopping: stopping)
 		var failures: [String] = []
 		var skipped: [String] = []
 		var stalled: Set<String> = []
@@ -616,7 +533,7 @@ public final class StackViewModel {
 		observation mine: Int,
 		epoch: Int
 	) async -> Bool {
-		let loaded = await loadConfigurations(for: names, from: client)
+		let loaded = await ConfigurationReader.configurations(for: names, from: client)
 
 		// Nothing this read found is published once the work it was for has been abandoned,
 		// or the sidebar could be moved by an action that is about to be refused anyway.
@@ -632,25 +549,6 @@ public final class StackViewModel {
 		place(loaded)
 
 		return true
-	}
-
-	/// What must not be acted on once something else has failed: for a start, whatever a
-	/// process depends on; for a stop, whatever depends on it.
-	private func blockers(among names: [String], stopping: Bool) -> [String: Set<String>] {
-		let wanted = Set(names)
-		var blockers: [String: Set<String>] = [:]
-
-		for name in names {
-			for dependency in configurations[name]?.dependsOn ?? [] where wanted.contains(dependency) {
-				if stopping {
-					blockers[dependency, default: []].insert(name)
-				} else {
-					blockers[name, default: []].insert(dependency)
-				}
-			}
-		}
-
-		return blockers
 	}
 
 	public func dismissError() {
@@ -686,7 +584,7 @@ public final class StackViewModel {
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
 
 			async let state = try? await client.projectState()
-			async let loaded = loadConfigurations(for: snapshot.map(\.name), from: client)
+			async let loaded = ConfigurationReader.configurations(for: snapshot.map(\.name), from: client)
 			let loadedProject = await state
 			let loadedConfigurations = await loaded
 			guard isCurrent(mine) else { return }
@@ -804,53 +702,12 @@ public final class StackViewModel {
 	/// which leaves it in no project. Project actions are withheld from the moment it
 	/// appears until it has been placed.
 	private func adopt(_ name: String, observation mine: Int) async {
-		let loaded = await loadConfigurations(for: [name], from: client)
+		let loaded = await ConfigurationReader.configurations(for: [name], from: client)
 
 		adopting.remove(name)
 
 		guard isCurrent(mine) else { return }
 
 		place(loaded)
-	}
-
-	// A process's configuration is fixed for the life of the project, so this runs
-	// once per connection rather than per state event.
-	private func loadConfigurations(
-		for names: [String],
-		from client: any ProcessComposeClient
-	) async -> [String: ProcessConfiguration] {
-		var loaded = await readConfigurations(for: names, from: client)
-
-		// Each configuration is a request of its own, so a single blip would otherwise keep
-		// a process out of the grouping for the whole connection, with no second chance
-		// until something else forces a reconnect.
-		let unread = names.filter { loaded[$0] == nil }
-
-		guard !unread.isEmpty else { return loaded }
-
-		for (name, configuration) in await readConfigurations(for: unread, from: client) {
-			loaded[name] = configuration
-		}
-
-		return loaded
-	}
-
-	private func readConfigurations(
-		for names: [String],
-		from client: any ProcessComposeClient
-	) async -> [String: ProcessConfiguration] {
-		await withTaskGroup(of: (String, ProcessConfiguration?).self) { group in
-			for name in names {
-				group.addTask {
-					(name, try? await client.configuration(for: name))
-				}
-			}
-
-			var configurations: [String: ProcessConfiguration] = [:]
-			for await (name, configuration) in group {
-				configurations[name] = configuration
-			}
-			return configurations
-		}
 	}
 }
