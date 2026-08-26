@@ -61,7 +61,6 @@ public final class StackViewModel {
 	/// The power button reaches the whole stack while the window shows one project, so
 	/// the confirmation says how far the stop goes.
 	public func question(for target: ConfirmTarget) -> String {
-		// Only the server's question counts what is running, and counting sorts the stack.
 		let running = if case .stopServer = target { runningProcesses.count } else { 0 }
 
 		return ConfirmationWording.question(
