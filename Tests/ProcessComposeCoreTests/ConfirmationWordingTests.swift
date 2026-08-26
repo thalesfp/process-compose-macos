@@ -2,58 +2,61 @@ import Testing
 
 @testable import ProcessComposeCore
 
-private func wording(
+private func question(
+	_ target: ConfirmTarget,
 	projects: [String: String] = [:],
 	isConnected: Bool = true,
 	running: Int = 0
-) -> ConfirmationWording {
-	ConfirmationWording(projectsByProcess: projects, isConnected: isConnected, runningCount: running)
+) -> String {
+	ConfirmationWording.question(
+		for: target,
+		projectsByProcess: projects,
+		isConnected: isConnected,
+		runningCount: running
+	)
 }
 
 struct ConfirmationWordingTests {
 	@Test("names every project a stack stop reaches")
 	func countsTheProjectsAStackStopReaches() {
-		let subject = wording(projects: ["api": "acme", "chatbot": "ai"])
+		let words = question(.stopStack(promised: ["api", "chatbot"]), projects: ["api": "acme", "chatbot": "ai"])
 
-		#expect(subject.question(for: .stopStack(promised: ["api", "chatbot"]))
-			== "Stop 2 running processes across 2 projects?")
+		#expect(words == "Stop 2 running processes across 2 projects?")
 	}
 
 	@Test("leaves the project out when a stack stop stays inside one")
 	func staysSilentAboutASingleProject() {
-		let subject = wording(projects: ["api": "acme", "worker": "acme"])
+		let words = question(.stopStack(promised: ["api", "worker"]), projects: ["api": "acme", "worker": "acme"])
 
-		#expect(subject.question(for: .stopStack(promised: ["api", "worker"])) == "Stop 2 running processes?")
+		#expect(words == "Stop 2 running processes?")
 	}
 
 	@Test("still counts a process whose project is not known yet")
 	func countsAProcessWithNoProject() {
-		let subject = wording(projects: ["api": "acme"])
+		let words = question(.stopStack(promised: ["api", "stray"]), projects: ["api": "acme"])
 
-		#expect(subject.question(for: .stopStack(promised: ["api", "stray"]))
-			== "Stop 2 running processes across 2 projects?")
+		#expect(words == "Stop 2 running processes across 2 projects?")
 	}
 
 	@Test("says what it cannot count when the app has no list of it")
 	func admitsToNotKnowingWhatIsRunning() {
-		let subject = wording(isConnected: false, running: 0)
+		let words = question(.stopServer(identity: 0), isConnected: false)
 
-		#expect(subject.question(for: .stopServer(identity: 0))
-			== "Stop the server and every process it is running?")
+		#expect(words == "Stop the server and every process it is running?")
 	}
 
 	@Test("asks only about the server when it is running nothing")
 	func asksAboutAnIdleServer() {
-		#expect(wording(running: 0).question(for: .stopServer(identity: 0)) == "Stop the server?")
+		#expect(question(.stopServer(identity: 0), running: 0) == "Stop the server?")
 	}
 
 	@Test("agrees with the number of dependencies it names")
 	func agreesWithTheNumberOfMissingDependencies() {
-		let subject = wording(projects: ["db": "acme", "cache": "acme"])
+		let projects = ["db": "acme", "cache": "acme"]
 
-		#expect(subject.question(for: .startProject("acme", missing: ["db"]))
+		#expect(question(.startProject("acme", missing: ["db"]), projects: projects)
 			== "acme depends on db in acme, which is not running. Start acme anyway?")
-		#expect(subject.question(for: .startProject("acme", missing: ["db", "cache"]))
+		#expect(question(.startProject("acme", missing: ["db", "cache"]), projects: projects)
 			== "acme depends on db in acme, cache in acme, which are not running. Start acme anyway?")
 	}
 

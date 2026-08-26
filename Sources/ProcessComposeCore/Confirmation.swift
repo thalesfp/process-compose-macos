@@ -21,21 +21,17 @@ public struct Confirmation: Sendable, Equatable {
 	let epoch: Int
 }
 
-/// The words a question and its answer button use. Built from what the stack looks like
-/// when the question is put on screen, so the count a dialog shows is the count that was
-/// true as it was asked.
-public struct ConfirmationWording: Sendable {
-	private let projectsByProcess: [String: String]
-	private let isConnected: Bool
-	private let runningCount: Int
-
-	public init(projectsByProcess: [String: String], isConnected: Bool, runningCount: Int) {
-		self.projectsByProcess = projectsByProcess
-		self.isConnected = isConnected
-		self.runningCount = runningCount
-	}
-
-	public func question(for target: ConfirmTarget) -> String {
+/// The words a question and its answer button use. Three of the four questions count from
+/// what the target promised, so those numbers hold still while the dialog is open. The
+/// server has no promise to count, so its question reads the stack, and the caller passes
+/// what it sees at the moment the words are asked for.
+public enum ConfirmationWording {
+	public static func question(
+		for target: ConfirmTarget,
+		projectsByProcess: [String: String],
+		isConnected: Bool,
+		runningCount: Int
+	) -> String {
 		switch target {
 		case .stopStack(let promised):
 			// Read from what the question promised, so the words cannot drift from what

@@ -61,12 +61,15 @@ public final class StackViewModel {
 	/// The power button reaches the whole stack while the window shows one project, so
 	/// the confirmation says how far the stop goes.
 	public func question(for target: ConfirmTarget) -> String {
-		ConfirmationWording(
+		// Only the server's question counts what is running, and counting sorts the stack.
+		let running = if case .stopServer = target { runningProcesses.count } else { 0 }
+
+		return ConfirmationWording.question(
+			for: target,
 			projectsByProcess: projectsByProcess,
 			isConnected: connection == .connected,
-			runningCount: runningProcesses.count
+			runningCount: running
 		)
-		.question(for: target)
 	}
 
 	public func answer(for target: ConfirmTarget) -> String {
@@ -330,11 +333,11 @@ public final class StackViewModel {
 		Task { await startProject(name) }
 	}
 
+	private var graph: DependencyGraph { DependencyGraph(configurations) }
+
 	/// What the project depends on that this start will not bring up. Asking the server to
 	/// start a process starts that process alone: process-compose v1.122.0 does not follow
 	/// `depends_on` for a start, it only waits on the condition and carries on.
-	private var graph: DependencyGraph { DependencyGraph(configurations) }
-
 	public func missingDependencies(startingProject project: String) -> [String] {
 		let starting = Set(startableProcesses(in: project).map(\.name))
 
@@ -469,6 +472,8 @@ public final class StackViewModel {
 			return
 		}
 
+		// One graph for the whole action: ordering and blocking must agree on the edges.
+		let graph = self.graph
 		let ordered = graph.inDependencyOrder(select())
 		let names = stopping ? Array(ordered.reversed()) : ordered
 
@@ -547,8 +552,6 @@ public final class StackViewModel {
 		return true
 	}
 
-	/// What must not be acted on once something else has failed: for a start, whatever a
-	/// process depends on; for a stop, whatever depends on it.
 	public func dismissError() {
 		lastError = nil
 	}
