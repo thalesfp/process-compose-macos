@@ -21,7 +21,7 @@ struct ProcessGroupingTests {
 
 	@Test("leaves a process ungrouped when its path says nothing about a repo")
 	func ungroupsUnknownPaths() {
-		#expect(ProcessGrouping.project(forWorkingDir: "/Users/thales/repos/acme/api") == nil)
+		#expect(ProcessGrouping.project(forWorkingDir: "/Users/dev/repos/acme/api") == nil)
 		#expect(ProcessGrouping.project(forWorkingDir: "") == nil)
 		#expect(ProcessGrouping.project(forWorkingDir: nil) == nil)
 	}
