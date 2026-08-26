@@ -931,7 +931,7 @@ struct StackViewModelTests {
 
 		let session = Task { await viewModel.observe() }
 		await settle(viewModel)
-		#expect(viewModel.projects.map(\.name) == ["chatbot-ai", "acme"])
+		#expect(viewModel.projects.map(\.name) == ["acme", "chatbot-ai"])
 
 		// The reload moves extra into acme.
 		client.workingDirs["extra"] = "acme/extra"
