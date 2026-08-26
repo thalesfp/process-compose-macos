@@ -4,10 +4,10 @@ public struct ServerAddress: Sendable, Hashable {
 	public let host: String
 	public let port: Int
 
-	// ./dev exports PC_PORT_NUM, defaulting to 28080 because the acme edge container holds 8080.
+	// process-compose serves its API on 8080, a port a dev stack has usually already taken.
 	public static let defaultPort = 28080
 	public static let defaultHost = "localhost"
-	// Matches the mcp_server block in acme's process-compose.yaml.
+	// A config sets its own MCP port in its mcp_server block, which has no fixed default.
 	public static let defaultMCPPort = 28081
 
 	public static let standard = ServerAddress(checked: defaultHost, port: defaultPort)
