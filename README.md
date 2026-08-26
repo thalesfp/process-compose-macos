@@ -4,6 +4,8 @@ A macOS window onto a [process-compose](https://github.com/F1bonacc1/process-com
 A sidebar picks one project at a time; the list groups that project's processes by namespace,
 streams their logs, and starts or stops them one at a time or all at once.
 
+![The window showing a sample stack: a project sidebar, processes grouped by namespace and role, and the log pane below](docs/screenshot.png)
+
 Unofficial project. Not affiliated with or endorsed by process-compose.
 
 ## Requirements
