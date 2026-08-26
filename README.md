@@ -58,3 +58,7 @@ at all can answer a port.
 The power button stops every running process but leaves the server up, so it can start them
 again. process-compose exits once its last process stops, so a stack you launch yourself
 needs `--keep-project` or the server will not be there to start anything.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
