@@ -386,7 +386,7 @@ struct StackView: View {
 			Button(power.title, systemImage: "power") { power.perform() }
 			.labelStyle(.titleAndIcon)
 			.disabled(!power.isEnabled)
-			.help(model.power == .canStop ? "Stop every running process" : "Start every process the stack defines")
+			.help(power.stops ? "Stop every running process" : "Start every process the stack defines")
 		}
 	}
 

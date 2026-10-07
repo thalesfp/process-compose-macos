@@ -7,8 +7,14 @@ struct PowerAction {
 	let model: StackViewModel
 	let server: ServerSupervisor
 
+	/// The model keeps the last states it heard after the server goes, so with no server up
+	/// the button starts one whatever those states say.
+	var stops: Bool {
+		!startsServer && model.power == .canStop
+	}
+
 	var title: String {
-		model.power == .canStop ? "Stop Stack…" : "Start Stack"
+		stops ? "Stop Stack…" : "Start Stack"
 	}
 
 	var isWorking: Bool {
