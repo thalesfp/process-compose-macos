@@ -63,7 +63,7 @@ struct ProcessRow: View {
 					.help("\(state.restarts) restarts")
 					.accessibilityLabel("\(state.restarts) restarts")
 			}
-			if kind != .task, state.hasRun, state.exitCode != 0 {
+			if kind != .task, state.hasRun, state.exitedWithError {
 				Text("exit \(state.exitCode)")
 					.font(.caption)
 					.foregroundStyle(.red)
@@ -116,7 +116,7 @@ struct ProcessRow: View {
 			}
 			if state.hasRun {
 				Text("exit \(state.exitCode)")
-					.foregroundStyle(state.exitCode == 0 ? Color.secondary : Color.red)
+					.foregroundStyle(state.exitedWithError ? Color.red : Color.secondary)
 			}
 		}
 	}

@@ -153,7 +153,7 @@ extension ProcessState {
 		case .watching:
 			.watching
 		case .completed:
-			exitCode == 0 ? .idle : .failed
+			exitedWithError ? .failed : .idle
 		case .disabled, .skipped:
 			.idle
 		case .error:
@@ -162,6 +162,9 @@ extension ProcessState {
 			.idle
 		}
 	}
+
+	/// Go reports -1 for a process ended by a signal, which is how a stop ends it.
+	public var exitedWithError: Bool { exitCode > 0 }
 
 	/// True once the process has actually finished a run, so a task that has never
 	/// started does not read as a clean exit.

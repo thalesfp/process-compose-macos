@@ -1511,11 +1511,18 @@ struct StackViewModelTests {
 }
 
 struct ProcessStateTests {
-	@Test("a process that exited non-zero reads as failed")
-	func nonZeroExitIsFailure() {
+	@Test("a process that exited with an error code reads as failed")
+	func errorExitIsFailure() {
 		let state = ProcessState(name: "migrate", status: .completed, exitCode: 1)
 
 		#expect(state.indicator == .failed)
+	}
+
+	@Test("a process stopped by a signal reads as idle, not failed")
+	func signalledStopIsIdle() {
+		let state = ProcessState(name: "worker", status: .completed, exitCode: -1)
+
+		#expect(state.indicator == .idle)
 	}
 
 	@Test("a clean one-shot reads as idle, not failed")
