@@ -36,7 +36,7 @@ struct ServerLogPane: View {
 				.fontWeight(.medium)
 
 			Text(status)
-				.font(.caption)
+				.font(.callout)
 				.foregroundStyle(.secondary)
 				.lineLimit(1)
 
@@ -45,20 +45,17 @@ struct ServerLogPane: View {
 			LogFilterField(text: $filter, isFocused: $isFilterFocused)
 
 			Text(LogFilter.countLabel(visible: visible, total: log.lines.count, filter: filter))
-				.font(.caption.monospacedDigit())
+				.font(.callout.monospacedDigit())
 				.foregroundStyle(.secondary)
 
 			Toggle("Follow", isOn: $isFollowing)
 				.toggleStyle(.switch)
-				.controlSize(.small)
-				.font(.caption)
+				.font(.callout)
 
 			Button("Clear") { log.clear() }
-				.controlSize(.small)
 
 			Button("Close", systemImage: "xmark", action: close)
 				.labelStyle(.iconOnly)
-				.controlSize(.small)
 				.help("Back to the process log")
 		}
 		.padding(.horizontal, 12)

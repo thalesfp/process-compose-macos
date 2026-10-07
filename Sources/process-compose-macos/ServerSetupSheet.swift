@@ -24,7 +24,7 @@ struct ServerSetupSheet: View {
 				Text("Set up the server")
 					.font(.headline)
 				Text("The app runs process-compose with these and stops it again when it quits.")
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.secondary)
 			}
 
@@ -54,7 +54,7 @@ struct ServerSetupSheet: View {
 
 			HStack {
 				Text(saveHint)
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.secondary)
 
 				Spacer(minLength: 12)

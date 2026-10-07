@@ -24,7 +24,7 @@ struct ProcessComposeApp: App {
 				mcpModel: mcpModel,
 				server: server
 			)
-			.frame(minWidth: 900, minHeight: 480)
+			.frame(minWidth: 1040, minHeight: 480)
 		}
 		.defaultSize(width: 1160, height: 760)
 		.windowToolbarStyle(.unified)

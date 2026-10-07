@@ -19,7 +19,7 @@ struct ValidationReadout: View {
 	private func label(_ text: String, systemImage: String, color: Color) -> some View {
 		Label(text, systemImage: systemImage)
 			.foregroundStyle(color)
-			.font(.caption)
+			.font(.callout)
 			.multilineTextAlignment(.leading)
 			.textSelection(.enabled)
 	}

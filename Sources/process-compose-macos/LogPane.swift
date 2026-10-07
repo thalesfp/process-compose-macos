@@ -46,7 +46,7 @@ struct LogPane: View {
 
 			if let error = model.lastError {
 				Text(error)
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.orange)
 					.lineLimit(1)
 			}
@@ -54,16 +54,14 @@ struct LogPane: View {
 			LogFilterField(text: $model.filter, isFocused: $isFilterFocused)
 
 			Text(LogFilter.countLabel(visible: visible, total: model.lines.count, filter: model.filter))
-				.font(.caption.monospacedDigit())
+				.font(.callout.monospacedDigit())
 				.foregroundStyle(.secondary)
 
 			Toggle("Follow", isOn: $model.isFollowing)
 				.toggleStyle(.switch)
-				.controlSize(.small)
-				.font(.caption)
+				.font(.callout)
 
 			Button(clear.title("Clear")) { clear.perform() }
-				.controlSize(.small)
 				.disabled(!clear.isEnabled)
 		}
 		.padding(.horizontal, 12)
@@ -131,8 +129,7 @@ struct LogFilterField: View {
 	var body: some View {
 		TextField("Filter", text: $text)
 			.textFieldStyle(.roundedBorder)
-			.controlSize(.small)
-			.font(.caption)
+			.font(.callout)
 			.frame(width: 160)
 			.focused($isFocused)
 			.accessibilityLabel("Filter the log")

@@ -25,7 +25,7 @@ struct ProcessRow: View {
 				.help(state.name)
 
 			Text(state.status.rawValue)
-				.font(.subheadline)
+				.font(.callout)
 				.foregroundStyle(.secondary)
 				.frame(width: 86, alignment: .leading)
 
@@ -46,26 +46,26 @@ struct ProcessRow: View {
 			if state.hasReadinessProbe, state.isRunning {
 				Label(state.isReady ? "ready" : "starting", systemImage: state.isReady ? "checkmark" : "clock")
 					.labelStyle(.titleAndIcon)
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(state.isReady ? Color.green : Color.orange)
 			}
 			if state.isWatched {
 				Image(systemName: "eye")
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.blue)
 					.help("A file watcher is armed")
 					.accessibilityLabel("File watcher armed")
 			}
 			if state.restarts > 0 {
 				Text("↺\(state.restarts)")
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.orange)
 					.help("\(state.restarts) restarts")
 					.accessibilityLabel("\(state.restarts) restarts")
 			}
 			if kind != .task, state.hasRun, state.exitedWithError {
 				Text("exit \(state.exitCode)")
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.red)
 					.accessibilityLabel("Exit code \(state.exitCode)")
 			}
@@ -84,7 +84,7 @@ struct ProcessRow: View {
 				serviceFacts
 			}
 		}
-		.font(.caption.monospacedDigit())
+		.font(.callout.monospacedDigit())
 		.foregroundStyle(.secondary)
 		.frame(width: Self.metricsWidth, alignment: .trailing)
 	}

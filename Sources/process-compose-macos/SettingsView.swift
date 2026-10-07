@@ -11,7 +11,7 @@ struct SettingsView: View {
 			LogSettings()
 				.tabItem { Label("Logs", systemImage: "text.alignleft") }
 		}
-		.frame(width: 460, height: 230)
+		.frame(width: 460, height: 260)
 	}
 }
 
@@ -41,7 +41,7 @@ private struct ServerSettings: View {
 				}
 			} footer: {
 				Text("PC_PORT_NUM sets the port the first time the app runs. What you apply here wins from then on. The MCP port is the one in the stack's mcp_server block; process-compose serves it at /sse.")
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.secondary)
 			}
 		}
@@ -109,7 +109,7 @@ private struct LogSettings: View {
 				Toggle("Ask before clearing a log", isOn: $asksBeforeClearingLog)
 			} footer: {
 				Text("The app keeps this many lines per process in memory and asks the server to replay the newest ones when a log opens.")
-					.font(.caption)
+					.font(.callout)
 					.foregroundStyle(.secondary)
 			}
 		}

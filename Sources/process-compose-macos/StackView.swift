@@ -235,15 +235,20 @@ struct StackView: View {
 		}
 	}
 
-	private func statusDot(_ label: String, color: Color, describedBy description: String) -> some View {
-		HStack(spacing: 6) {
-			Circle()
-				.fill(color)
-				.frame(width: 8, height: 8)
+	private func statusDot(
+		_ label: String,
+		signal: StatusSignal = .on,
+		color: Color,
+		describedBy description: String
+	) -> some View {
+		Label {
 			Text(label)
 				.font(.callout)
 				.foregroundStyle(.secondary)
+		} icon: {
+			StatusMark(signal: signal, color: color)
 		}
+		.labelStyle(.titleAndIcon)
 		.accessibilityElement(children: .ignore)
 		.accessibilityLabel(description)
 	}
@@ -259,7 +264,12 @@ struct StackView: View {
 			Button("Copy MCP URL") { mcpModel.url.map { NSPasteboard.copy($0.absoluteString) } }
 				.disabled(mcpModel.url == nil)
 		} label: {
-			statusDot("MCP", color: mcpModel.isReachable ? .green : .secondary, describedBy: help)
+			statusDot(
+				"MCP",
+				signal: mcpModel.isReachable ? .on : .off,
+				color: mcpModel.isReachable ? .green : .secondary,
+				describedBy: help
+			)
 		}
 		.menuIndicator(.hidden)
 		.fixedSize()
@@ -291,7 +301,7 @@ struct StackView: View {
 			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
 				.disabled(model.configURLs.isEmpty)
 		} label: {
-			statusDot("Server", color: serverColor, describedBy: help)
+			statusDot("Server", signal: serverSignal, color: serverColor, describedBy: help)
 		}
 		.menuIndicator(.hidden)
 		.fixedSize()
@@ -313,6 +323,14 @@ struct StackView: View {
 			"Start the stack here, or run it yourself and the app picks it up."
 		case .running:
 			"The app connects as soon as the server answers."
+		}
+	}
+
+	private var serverSignal: StatusSignal {
+		switch server.state {
+		case .running: .on
+		case .failed: .failed
+		case .idle, .unconfigured, .remote: .off
 		}
 	}
 
@@ -475,7 +493,6 @@ struct StackView: View {
 					.textSelection(.enabled)
 				Spacer(minLength: 12)
 				Button("Dismiss") { model.dismissError() }
-					.controlSize(.small)
 			}
 			.padding(.horizontal, 12)
 			.padding(.vertical, 8)
@@ -560,5 +577,33 @@ struct StackView: View {
 		let client = LiveProcessComposeClient(address: address)
 		model.use(client, at: address)
 		logModel.use(client)
+	}
+}
+
+/// The toolbar readouts carry their state in the mark's shape as well as its color.
+enum StatusSignal {
+	case on
+	case off
+	case failed
+}
+
+// A toolbar Menu renders only its label's Text and Image, so the mark has to be a symbol.
+struct StatusMark: View {
+	let signal: StatusSignal
+	let color: Color
+
+	var body: some View {
+		Image(systemName: symbol)
+			.imageScale(.small)
+			.symbolRenderingMode(.palette)
+			.foregroundStyle(color)
+	}
+
+	private var symbol: String {
+		switch signal {
+		case .on: "circle.fill"
+		case .off: "circle"
+		case .failed: "exclamationmark.triangle.fill"
+		}
 	}
 }
