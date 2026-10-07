@@ -117,6 +117,14 @@ public final class StackViewModel {
 		reconcileSelection()
 	}
 
+	/// Shows a process wherever it lives: its project in the sidebar, then its row.
+	public func reveal(_ name: String) {
+		guard statesByName[name] != nil else { return }
+
+		select(project: projectsByProcess[name] ?? ProcessGrouping.ungrouped)
+		selection = name
+	}
+
 	/// What each process is for, decided from its config and how it behaves.
 	public var kinds: [String: ProcessKind] {
 		Dictionary(

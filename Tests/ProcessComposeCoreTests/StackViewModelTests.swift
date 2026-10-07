@@ -1110,6 +1110,28 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("shows a process from another project when asked to reveal it")
+	func revealsAProcessInAnotherProject() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "chatbot", namespace: "ai", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "chatbot": "ai/chatbot"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.select(project: "acme")
+
+		viewModel.reveal("chatbot")
+
+		#expect(viewModel.selectedProject == "ai")
+		#expect(viewModel.selection == "chatbot")
+
+		client.finishStream()
+		await session.value
+	}
+
 	@Test("voids a log clear agreed to before the server was replaced")
 	func voidsAClearLogAnswerAfterAbandonment() {
 		let viewModel = StackViewModel(client: StubClient(processes: []))

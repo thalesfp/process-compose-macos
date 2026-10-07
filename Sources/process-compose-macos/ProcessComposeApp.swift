@@ -8,8 +8,9 @@ struct ProcessComposeApp: App {
 
 	private static let client = LiveProcessComposeClient(address: .fromEnvironment())
 	@MainActor fileprivate static let server = ServerSupervisor()
+	@MainActor fileprivate static let model = StackViewModel(client: client)
 
-	@State private var model = StackViewModel(client: client)
+	@State private var model = ProcessComposeApp.model
 	@State private var logModel = LogViewModel(client: client)
 	@State private var mcpModel = MCPServerViewModel()
 	@State private var server = ProcessComposeApp.server
@@ -45,10 +46,41 @@ struct ProcessComposeApp: App {
 
 // A SwiftPM executable launches as an accessory process, so the window would open
 // behind every other app and take no menu bar without an explicit activation policy.
+@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+	private var alerts: FailureAlerts?
+
 	func applicationDidFinishLaunching(_ notification: Notification) {
 		NSApplication.shared.setActivationPolicy(.regular)
 		NSApplication.shared.activate(ignoringOtherApps: true)
+
+		alerts = FailureAlerts(model: ProcessComposeApp.model)
+	}
+
+	func applicationDidBecomeActive(_ notification: Notification) {
+		alerts?.acknowledge()
+	}
+
+	func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+		let menu = NSMenu()
+		menu.autoenablesItems = false
+
+		let item = NSMenuItem(title: power.title, action: #selector(togglePower), keyEquivalent: "")
+		item.target = self
+		item.isEnabled = power.isEnabled
+		menu.addItem(item)
+
+		return menu
+	}
+
+	/// Stopping asks in the window, so the window comes forward with the question.
+	@objc private func togglePower() {
+		NSApp.activate()
+		power.perform()
+	}
+
+	private var power: PowerAction {
+		PowerAction(model: ProcessComposeApp.model, server: ProcessComposeApp.server)
 	}
 
 	func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
