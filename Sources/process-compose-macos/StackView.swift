@@ -155,6 +155,12 @@ struct StackView: View {
 				)
 
 				if isConnected {
+					if let uptime = model.uptime {
+						Divider()
+							.frame(height: 12)
+						uptimeReadout(uptime)
+					}
+
 					Divider()
 						.frame(height: 12)
 					usageReadout
@@ -429,6 +435,19 @@ struct StackView: View {
 			: AnyShapeStyle(.regularMaterial)
 	}
 
+	private func uptimeReadout(_ uptime: Duration) -> some View {
+		let label = uptime.compactLabel
+
+		return Label(label, systemImage: "clock")
+			.labelStyle(.titleAndIcon)
+			.font(.callout.monospacedDigit())
+			.foregroundStyle(.secondary)
+			.fixedSize()
+			.accessibilityElement(children: .ignore)
+			.accessibilityLabel("The server has been up for \(label)")
+			.help("Time since the server started")
+	}
+
 	/// Totals across every running process. A second `.status` toolbar item would be
 	/// collapsed into the overflow menu, so this lives inside the connection item.
 	private var usageReadout: some View {
@@ -452,9 +471,7 @@ struct StackView: View {
 
 	private var subtitle: String {
 		guard let project = model.project else { return "Not connected" }
-		let running = "\(model.runningCount) of \(model.processCount) running"
-		guard let uptime = model.uptime else { return "\(running)  ·  \(project.version)" }
-		return "\(running)  ·  up \(uptime.compactLabel)  ·  \(project.version)"
+		return "\(model.runningCount) of \(model.processCount) running  ·  \(project.version)"
 	}
 
 	private var address: ServerAddress? {
