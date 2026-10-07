@@ -371,6 +371,41 @@ struct ServerSupervisorTests {
 		#expect(supervisor.wouldStop(movingTo: ServerAddress(host: "localhost", port: 28099)) == false)
 	}
 
+	@Test("still holds a stack that survived the attempt to stop it")
+	func holdsAStackThatWouldNotStop() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		runner.ignoresKill = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore(),
+			grace: .milliseconds(100)
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		await supervisor.stop()
+
+		#expect(supervisor.holdsServer)
+		#expect(supervisor.isOwned == false)
+	}
+
+	@Test("holds nothing once its server has stopped")
+	func holdsNothingAfterAStop() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		await supervisor.stop()
+
+		#expect(supervisor.holdsServer == false)
+	}
+
 	@Test("reports that it stopped the server it started")
 	func reportsAStoppedServer() async {
 		let supervisor = ServerSupervisor(

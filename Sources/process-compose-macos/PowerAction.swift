@@ -22,7 +22,7 @@ struct PowerAction {
 	}
 
 	var isEnabled: Bool {
-		!isWorking && (model.canChangePower || startsServer)
+		!isWorking && !model.isQuitting && (model.canChangePower || startsServer)
 	}
 
 	func perform() {

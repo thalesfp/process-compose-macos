@@ -3,10 +3,11 @@ import SwiftUI
 
 struct SettingsView: View {
 	let server: ServerSupervisor
+	let quit: QuitCoordinator
 
 	var body: some View {
 		TabView {
-			ServerSettings(server: server)
+			ServerSettings(server: server, quit: quit)
 				.tabItem { Label("Server", systemImage: "network") }
 			LogSettings()
 				.tabItem { Label("Logs", systemImage: "text.alignleft") }
@@ -17,6 +18,7 @@ struct SettingsView: View {
 
 private struct ServerSettings: View {
 	let server: ServerSupervisor
+	let quit: QuitCoordinator
 
 	@AppStorage(PreferenceKey.host) private var host = PreferenceDefault.host
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
@@ -37,7 +39,7 @@ private struct ServerSettings: View {
 				HStack {
 					Spacer(minLength: 0)
 					Button("Apply") { requestApply() }
-						.disabled(!hasChanges)
+						.disabled(!hasChanges || quit.isQuitting)
 				}
 			} footer: {
 				Text("PC_PORT_NUM sets the port the first time the app runs. What you apply here wins from then on. The MCP port is the one in the stack's mcp_server block; process-compose serves it at /sse.")
@@ -66,7 +68,7 @@ private struct ServerSettings: View {
 	// A half-typed port names a different server, and pointing the app at one retires the
 	// server it started for the last, so these only take effect once they are asked for.
 	private func requestApply() {
-		guard hasChanges else { return }
+		guard hasChanges, !quit.isQuitting else { return }
 
 		let target = ServerAddress(host: draftHost, port: draftPort)
 

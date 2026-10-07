@@ -143,6 +143,12 @@ public final class ServerSupervisor {
 		stopTask != nil
 	}
 
+	/// A server process this app is holding, which quitting has to stop or leave behind on
+	/// purpose. Wider than `isOwned`: a stack that survived a stop is still held.
+	public var holdsServer: Bool {
+		server != nil
+	}
+
 	/// Whether pointing at `address` takes down the stack this app started. An address the
 	/// app cannot use leaves it running.
 	public func wouldStop(movingTo address: ServerAddress?) -> Bool {
@@ -381,8 +387,8 @@ public final class ServerSupervisor {
 		return .stopped
 	}
 
-	/// A quit the app never sees coming, such as a log out, cannot await, so this waits in
-	/// place and gives the stack less room than `stop` does.
+	/// The app's last moment cannot await, so this waits in place and gives the stack less
+	/// room than `stop` does.
 	public func stopOnQuit() {
 		// A copy of the app that started nothing leaves the record for the copy that did.
 		guard let server else {

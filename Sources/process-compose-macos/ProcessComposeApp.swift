@@ -9,11 +9,13 @@ struct ProcessComposeApp: App {
 	private static let client = LiveProcessComposeClient(address: .fromEnvironment())
 	@MainActor fileprivate static let server = ServerSupervisor()
 	@MainActor fileprivate static let model = StackViewModel(client: client)
+	@MainActor fileprivate static let quit = QuitCoordinator(model: model, server: server)
 
 	@State private var model = ProcessComposeApp.model
 	@State private var logModel = LogViewModel(client: client)
 	@State private var mcpModel = MCPServerViewModel()
 	@State private var server = ProcessComposeApp.server
+	@State private var quit = ProcessComposeApp.quit
 
 	@AppStorage(PreferenceKey.logFontSize) private var logFontSize = LogFont.standard
 
@@ -23,7 +25,8 @@ struct ProcessComposeApp: App {
 				model: model,
 				logModel: logModel,
 				mcpModel: mcpModel,
-				server: server
+				server: server,
+				quit: quit
 			)
 			.frame(minWidth: 1040, minHeight: 480)
 		}
@@ -34,12 +37,13 @@ struct ProcessComposeApp: App {
 				model: model,
 				logModel: logModel,
 				server: server,
+				quit: quit,
 				logFontSize: $logFontSize
 			)
 		}
 
 		Settings {
-			SettingsView(server: server)
+			SettingsView(server: server, quit: quit)
 		}
 	}
 }
@@ -55,6 +59,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		NSApplication.shared.activate(ignoringOtherApps: true)
 
 		alerts = FailureAlerts(model: ProcessComposeApp.model)
+
+		NSAppleEventManager.shared().setEventHandler(
+			self,
+			andSelector: #selector(handleQuit(_:withReply:)),
+			forEventClass: AEEventClass(kCoreEventClass),
+			andEventID: AEEventID(kAEQuitApplication)
+		)
+	}
+
+	/// Stands in for AppKit's own quit handler, which a sheet on screen would stop short.
+	@objc private func handleQuit(_ event: NSAppleEventDescriptor, withReply reply: NSAppleEventDescriptor) {
+		ProcessComposeApp.quit.makeRoom(for: QuitReason(event: event))
+		NSApp.terminate(nil)
 	}
 
 	func applicationDidBecomeActive(_ notification: Notification) {
@@ -87,49 +104,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 		true
 	}
 
-	/// The stack goes down with the app, which is worth asking about first.
+	/// Every way of quitting arrives here, and the coordinator decides what each one needs.
 	func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-		guard ProcessComposeApp.server.isOwned else { return .terminateNow }
-
-		let alert = NSAlert()
-		alert.messageText = "Stop the stack before quitting?"
-		alert.informativeText = "The app started this server. Quitting stops it and every process it is running."
-		alert.addButton(withTitle: "Stop and Quit")
-		alert.addButton(withTitle: "Cancel")
-
-		guard let window = sender.mainWindow ?? sender.windows.first(where: \.isVisible) else {
-			guard alert.runModal() == .alertFirstButtonReturn else { return .terminateCancel }
-
-			Task { @MainActor in
-				await ProcessComposeApp.server.stop()
-				sender.reply(toApplicationShouldTerminate: true)
-			}
-
-			return .terminateLater
-		}
-
-		// A sheet drops from the window the stack belongs to, so the question arrives where
-		// the user was looking. It answers later, which is what `terminateLater` waits for.
-		alert.beginSheetModal(for: window) { response in
-			guard response == .alertFirstButtonReturn else {
-				sender.reply(toApplicationShouldTerminate: false)
-				return
-			}
-
-			// Stopping is awaited rather than waited out in place, so process-compose gets
-			// its full shutdown without the app freezing while it takes it.
-			Task { @MainActor in
-				await ProcessComposeApp.server.stop()
-				sender.reply(toApplicationShouldTerminate: true)
-			}
-		}
-
-		return .terminateLater
+		ProcessComposeApp.quit.shouldTerminate(.ofCurrentEvent)
 	}
 
-	// A quit the delegate never sees, such as a log out, still has to take the server with it.
+	// Leaving the stack running was chosen, or the system could not wait; anything else
+	// still held at this point goes with the app.
 	func applicationWillTerminate(_ notification: Notification) {
-		ProcessComposeApp.server.stopOnQuit()
+		if !ProcessComposeApp.quit.leavesStackRunning {
+			ProcessComposeApp.server.stopOnQuit()
+		}
+
 		LiveServerRunner.endRunningChecks()
 	}
 }

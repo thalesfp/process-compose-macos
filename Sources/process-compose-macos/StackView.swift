@@ -7,6 +7,7 @@ struct StackView: View {
 	@Bindable var logModel: LogViewModel
 	let mcpModel: MCPServerViewModel
 	let server: ServerSupervisor
+	let quit: QuitCoordinator
 
 	@State private var windowState = WindowState()
 
@@ -57,6 +58,8 @@ struct StackView: View {
 			}
 			.dialogSuppressionToggle(isSuppressed: isClearLogQuestionSuppressed)
 		}
+		.overlay { if quit.isStopping { stoppingOverlay } }
+		.background(StackWindowHook(quit: quit))
 		.focusedSceneValue(\.windowState, windowState)
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
@@ -506,6 +509,38 @@ struct StackView: View {
 			.padding(12)
 			.transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
 		}
+	}
+
+	/// Quitting waits on the stack, and this says so for as long as it takes. It also stands
+	/// over the window, so nothing in it can be pressed meanwhile.
+	private var stoppingOverlay: some View {
+		VStack(spacing: 10) {
+			ProgressView()
+				.controlSize(.large)
+
+			Text("Stopping the stack…")
+				.font(.title3.weight(.semibold))
+
+			Text("The app quits once everything has stopped.")
+				.font(.callout)
+				.foregroundStyle(.secondary)
+
+			if !quit.stoppingProcesses.isEmpty {
+				Text("Running when the stop began: \(quit.stoppingProcesses.joined(separator: ", "))")
+					.font(.callout)
+					.foregroundStyle(.secondary)
+					.multilineTextAlignment(.center)
+			}
+		}
+		.padding(28)
+		.frame(maxWidth: 440)
+		.background(errorBackground, in: RoundedRectangle(cornerRadius: 12))
+		.overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator))
+		.frame(maxWidth: .infinity, maxHeight: .infinity)
+		.background(Color(nsColor: .windowBackgroundColor).opacity(reduceTransparency ? 1 : 0.6))
+		.contentShape(Rectangle())
+		.accessibilityElement(children: .combine)
+		.accessibilityAddTraits(.isModal)
 	}
 
 	private var errorBackground: AnyShapeStyle {

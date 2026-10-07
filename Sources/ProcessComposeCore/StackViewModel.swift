@@ -32,6 +32,9 @@ public final class StackViewModel {
 
 	public private(set) var isChangingStack = false
 
+	/// Set while the app stops its server to quit, so nothing new is sent to it meanwhile.
+	public var isQuitting = false
+
 	/// Whether every process's project is known. The server answers for each process
 	/// separately, and one refusal leaves that process out of the grouping, where a
 	/// project action would pass over it without saying so.
@@ -61,7 +64,7 @@ public final class StackViewModel {
 	/// Whether a bulk action may run at all, before asking whether it has anything to do. A
 	/// confirmed stop runs on this, since what it was asked about can finish on its own.
 	private var canActOnStack: Bool {
-		connection == .connected && !isChangingStack && busy.isEmpty
+		connection == .connected && !isChangingStack && busy.isEmpty && !isQuitting
 	}
 
 	/// The power button reaches the whole stack while the window shows one project, so
@@ -261,12 +264,12 @@ public final class StackViewModel {
 
 	public func canStart(_ name: String?) -> Bool {
 		guard let name, let state = statesByName[name] else { return false }
-		return state.canStart && !busy.contains(name) && !isChangingStack
+		return state.canStart && !busy.contains(name) && !isChangingStack && !isQuitting
 	}
 
 	public func canStop(_ name: String?) -> Bool {
 		guard let name, let state = statesByName[name] else { return false }
-		return state.canStop && !busy.contains(name) && !isChangingStack
+		return state.canStop && !busy.contains(name) && !isChangingStack && !isQuitting
 	}
 
 	public func startProcess(_ name: String) async {

@@ -1304,6 +1304,29 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("offers nothing new while the app is quitting")
+	func offersNothingWhileQuitting() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .completed),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.isQuitting = true
+
+		#expect(viewModel.canChangePower == false)
+		#expect(viewModel.canStop("api") == false)
+		#expect(viewModel.canStart("worker") == false)
+		#expect(viewModel.canStopProject("acme") == false)
+
+		client.finishStream()
+		await session.value
+	}
+
 	@Test("voids a log clear agreed to before the server was replaced")
 	func voidsAClearLogAnswerAfterAbandonment() {
 		let viewModel = StackViewModel(client: StubClient(processes: []))

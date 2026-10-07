@@ -8,6 +8,7 @@ struct StackCommands: Commands {
 	@Bindable var model: StackViewModel
 	@Bindable var logModel: LogViewModel
 	let server: ServerSupervisor
+	let quit: QuitCoordinator
 	@Binding var logFontSize: Double
 
 	@FocusedValue(\.windowState) private var windowState: WindowState?
@@ -89,17 +90,17 @@ struct StackCommands: Commands {
 		CommandMenu("Server") {
 			Button("Start Server") { Task { await server.start() } }
 				.keyboardShortcut("r", modifiers: [.command, .option])
-				.disabled(!server.canStart)
+				.disabled(!server.canStart || quit.isQuitting)
 
 			Button("Stop Server…") { model.ask(.stopServer(identity: server.identity)) }
 				.keyboardShortcut(".", modifiers: [.command, .option])
-				.disabled(!server.isOwned)
+				.disabled(!server.isOwned || quit.isQuitting)
 
 			Divider()
 
 			Button("Set Up Server…") { windowState?.isSettingUpServer = true }
 				.keyboardShortcut("s", modifiers: [.command, .option])
-				.disabled(windowState == nil)
+				.disabled(windowState == nil || quit.isQuitting)
 
 			Button(windowState?.isShowingServerLog == true ? "Hide Server Log" : "Show Server Log") {
 				windowState?.isShowingServerLog.toggle()
