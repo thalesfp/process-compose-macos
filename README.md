@@ -13,6 +13,12 @@ Unofficial project. Not affiliated with or endorsed by process-compose.
 - macOS 14 or later
 - process-compose, either already running with its REST API reachable or installed for the app to start
 
+## Install
+
+```
+brew install thalesfp/process-compose-macos/process-compose-macos
+```
+
 ## Build
 
 ```

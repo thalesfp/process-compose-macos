@@ -1,0 +1,102 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Check tag format
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "tag $GITHUB_REF_NAME is not a plain vX.Y.Z release tag" >&2
+            exit 1
+          fi
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        env:
+          CERT_P12_BASE64: ${{ secrets.DEVELOPER_ID_APP_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.DEVELOPER_ID_APP_CERT_PASSWORD }}
+        run: |
+          KEYCHAIN_PASSWORD="$(openssl rand -base64 24)"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+
+          CERT_PATH="$RUNNER_TEMP/developer-id.p12"
+          echo "$CERT_P12_BASE64" | base64 --decode > "$CERT_PATH"
+
+          KEYCHAIN_PATH="$RUNNER_TEMP/release.keychain-db"
+          echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -t 3600 -u "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain
+          rm -f "$CERT_PATH"
+
+      - name: Build and sign the app
+        env:
+          PROCESS_COMPOSE_MACOS_VERSION: ${{ env.VERSION }}
+          CODESIGN_IDENTITY: ${{ secrets.DEVELOPER_ID_APP_IDENTITY }}
+        run: ./Scripts/bundle.sh
+
+      - name: Notarize
+        env:
+          APPSTORE_CONNECT_API_KEY_BASE64: ${{ secrets.APPSTORE_CONNECT_API_KEY_P8 }}
+          APPSTORE_CONNECT_API_KEY_ID: ${{ secrets.APPSTORE_CONNECT_API_KEY_ID }}
+          APPSTORE_CONNECT_ISSUER_ID: ${{ secrets.APPSTORE_CONNECT_ISSUER_ID }}
+        run: |
+          KEY_PATH="$RUNNER_TEMP/appstore-connect.p8"
+          echo "$APPSTORE_CONNECT_API_KEY_BASE64" | base64 --decode > "$KEY_PATH"
+
+          SUBMIT_ZIP="$RUNNER_TEMP/process-compose-signed.zip"
+          ditto -c -k --keepParent "build/Process Compose.app" "$SUBMIT_ZIP"
+
+          xcrun notarytool submit "$SUBMIT_ZIP" \
+            --key "$KEY_PATH" \
+            --key-id "$APPSTORE_CONNECT_API_KEY_ID" \
+            --issuer "$APPSTORE_CONNECT_ISSUER_ID" \
+            --wait
+
+          xcrun stapler staple "build/Process Compose.app"
+          rm -f "$KEY_PATH" "$SUBMIT_ZIP"
+
+      - name: Package the release artifact
+        run: |
+          ARTIFACT="process-compose-macos-${VERSION}.zip"
+          echo "ARTIFACT=$ARTIFACT" >> "$GITHUB_ENV"
+          ditto -c -k --keepParent "build/Process Compose.app" "$ARTIFACT"
+          echo "ARTIFACT_SHA256=$(shasum -a 256 "$ARTIFACT" | cut -d ' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: Remove the temporary keychain
+        if: always()
+        run: security delete-keychain "$KEYCHAIN_PATH" || true
+
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" "$ARTIFACT" --title "$GITHUB_REF_NAME" --generate-notes
+
+      - name: Bump the Homebrew cask
+        env:
+          GH_TOKEN: ${{ secrets.TAP_REPO_PAT }}
+        run: |
+          TAP_DIR="$RUNNER_TEMP/homebrew-process-compose-macos"
+          gh repo clone thalesfp/homebrew-process-compose-macos "$TAP_DIR" -- -q
+
+          CASK="$TAP_DIR/Casks/process-compose-macos.rb"
+          sed -i '' \
+            -e "s/version \".*\"/version \"${VERSION}\"/" \
+            -e "s/sha256 \".*\"/sha256 \"${ARTIFACT_SHA256}\"/" \
+            "$CASK"
+
+          cd "$TAP_DIR"
+          git config user.name "process-compose-macos release"
+          git config user.email "actions@users.noreply.github.com"
+          git commit -am "Update process-compose-macos to ${VERSION}"
+          git push
