@@ -55,7 +55,13 @@ public final class StackViewModel {
 	/// single process's own action never overlap, in either direction, so neither can
 	/// send a second request for a process the other is already asking about.
 	public var canChangePower: Bool {
-		connection == .connected && !isChangingStack && busy.isEmpty && power != .unavailable
+		canActOnStack && power != .unavailable
+	}
+
+	/// Whether a bulk action may run at all, before asking whether it has anything to do. A
+	/// confirmed stop runs on this, since what it was asked about can finish on its own.
+	private var canActOnStack: Bool {
+		connection == .connected && !isChangingStack && busy.isEmpty
 	}
 
 	/// The power button reaches the whole stack while the window shows one project, so
@@ -295,16 +301,16 @@ public final class StackViewModel {
 	}
 
 	public func stopStack(promised: [String]? = nil) async {
-		guard canChangePower else { return refuse("stop", "the stack") }
+		guard canActOnStack else { return refuse("stop", "the stack") }
 
 		await applyToStack(
 			stopping: true,
 			validate: {
 				guard let promised else { return nil }
 
-				return self.runningProcesses.map(\.name).sorted() == promised
+				return Self.keepsTo(promised, running: self.runningProcesses)
 					? nil
-					: "What is running changed while the question was open, so nothing was stopped"
+					: "Something started while the question was open, so nothing was stopped"
 			},
 			select: { self.runningProcesses.map(\.name) }
 		) { client, name in
@@ -393,21 +399,27 @@ public final class StackViewModel {
 	}
 
 	public func stopProject(_ name: String, promised: [String]? = nil) async {
-		guard canStopProject(name) else { return refuse("stop", name) }
+		guard canActOnProjects else { return refuse("stop", name) }
 
 		await applyToStack(
 			stopping: true,
 			validate: {
 				guard let promised else { return nil }
 
-				return self.stoppableProcesses(in: name).map(\.name).sorted() == promised
+				return Self.keepsTo(promised, running: self.stoppableProcesses(in: name))
 					? nil
-					: "What is running in \(name) changed while the question was open, so nothing was stopped"
+					: "Something started in \(name) while the question was open, so nothing was stopped"
 			},
 			select: { self.stoppableProcesses(in: name).map(\.name) }
 		) { client, process in
 			try await client.stop(process)
 		}
+	}
+
+	/// A stop reaches past its question only through a process that started after it was
+	/// asked. One that stopped on its own in the meantime leaves less to do, not more.
+	private static func keepsTo(_ promised: [String], running: [ProcessState]) -> Bool {
+		Set(running.map(\.name)).isSubset(of: promised)
 	}
 
 	/// A menu is drawn before it is chosen and a dialog is answered after it is asked, so
@@ -429,7 +441,7 @@ public final class StackViewModel {
 	/// reaches whatever those depend on as well, so it is only offered while the grouping
 	/// accounts for every process and nothing anywhere is carrying a request of its own.
 	private var canActOnProjects: Bool {
-		connection == .connected && !isChangingStack && isGroupingComplete && busy.isEmpty
+		canActOnStack && isGroupingComplete
 	}
 
 	private func processes(in project: String) -> [ProcessState] {

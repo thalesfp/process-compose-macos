@@ -1036,7 +1036,7 @@ struct StackViewModelTests {
 		await viewModel.perform(viewModel.confirmation!)
 
 		#expect(client.stopped.isEmpty)
-		#expect(viewModel.lastError == "What is running in acme changed while the question was open, so nothing was stopped")
+		#expect(viewModel.lastError == "Something started in acme while the question was open, so nothing was stopped")
 
 		client.finishStream()
 		await session.value
@@ -1080,7 +1080,101 @@ struct StackViewModelTests {
 		await viewModel.perform(viewModel.confirmation!)
 
 		#expect(client.stopped.isEmpty)
-		#expect(viewModel.lastError == "What is running changed while the question was open, so nothing was stopped")
+		#expect(viewModel.lastError == "Something started while the question was open, so nothing was stopped")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops what is still running when a process stopped while the stack question was open")
+	func stopsTheRestWhenAProcessStoppedDuringTheQuestion() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.togglePower()
+
+		client.emit(.init(state: .init(name: "worker", namespace: "api", status: .completed, exitCode: -1)))
+		await settle(until: { viewModel.runningProcesses.count == 1 })
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped == ["api"])
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("finishes quietly when the whole stack stopped while the question was open")
+	func finishesQuietlyWhenTheStackAlreadyStopped() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.togglePower()
+
+		client.emit(.init(state: .init(name: "api", namespace: "api", status: .completed, exitCode: -1)))
+		await settle(until: { viewModel.runningProcesses.count == 0 })
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("stops what is still running in a project when one stopped while the question was open")
+	func stopsTheRestOfAProjectWhenOneStoppedDuringTheQuestion() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.requestStopProject("acme")
+
+		client.emit(.init(state: .init(name: "worker", namespace: "api", status: .completed, exitCode: -1)))
+		await settle(until: { viewModel.runningProcesses.count == 1 })
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped == ["api"])
+		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("finishes quietly when a whole project stopped while the question was open")
+	func finishesQuietlyWhenTheProjectAlreadyStopped() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		viewModel.requestStopProject("acme")
+
+		client.emit(.init(state: .init(name: "api", namespace: "api", status: .completed, exitCode: -1)))
+		await settle(until: { viewModel.runningProcesses.count == 0 })
+		await viewModel.perform(viewModel.confirmation!)
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == nil)
 
 		client.finishStream()
 		await session.value
