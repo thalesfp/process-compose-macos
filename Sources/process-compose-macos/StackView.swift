@@ -277,15 +277,16 @@ struct StackView: View {
 			Button("Start Server") { Task { await server.start() } }
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { model.ask(.stopServer(identity: server.identity)) }
+			Button("Stop Server…") { model.ask(.stopServer(identity: server.identity)) }
 				.disabled(!server.isOwned)
 
-			Button("Set Up Server...") { windowState.isSettingUpServer = true }
+			Button("Set Up Server…") { windowState.isSettingUpServer = true }
 
 			Divider()
 
-			Button("Show Server Log") { windowState.isShowingServerLog = true }
-				.disabled(windowState.isShowingServerLog)
+			Button(windowState.isShowingServerLog ? "Hide Server Log" : "Show Server Log") {
+				windowState.isShowingServerLog.toggle()
+			}
 
 			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
 				.disabled(model.configURLs.isEmpty)
@@ -381,7 +382,7 @@ struct StackView: View {
 					.font(.callout)
 			} actions: {
 				if server.state == .unconfigured {
-					Button("Set Up Server...") { windowState.isSettingUpServer = true }
+					Button("Set Up Server…") { windowState.isSettingUpServer = true }
 				} else {
 					Button(power.title) { power.perform() }
 						.disabled(!power.isEnabled)

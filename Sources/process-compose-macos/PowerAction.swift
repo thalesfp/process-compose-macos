@@ -8,7 +8,7 @@ struct PowerAction {
 	let server: ServerSupervisor
 
 	var title: String {
-		model.power == .canStop ? "Stop Stack..." : "Start Stack"
+		model.power == .canStop ? "Stop Stack…" : "Start Stack"
 	}
 
 	var isWorking: Bool {

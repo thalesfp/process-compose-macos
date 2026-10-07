@@ -12,7 +12,7 @@ struct ProjectActions: View {
 		Button(title("Start All")) { project.map(model.requestStartProject) }
 			.disabled(!allows(model.canStartProject))
 
-		Button(title("Stop All") + "...") { project.map(model.requestStopProject) }
+		Button(title("Stop All") + "…") { project.map(model.requestStopProject) }
 			.disabled(!allows(model.canStopProject))
 	}
 

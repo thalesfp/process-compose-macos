@@ -91,24 +91,30 @@ struct StackCommands: Commands {
 				.keyboardShortcut("r", modifiers: [.command, .option])
 				.disabled(!server.canStart)
 
-			Button("Stop Server...") { model.ask(.stopServer(identity: server.identity)) }
+			Button("Stop Server…") { model.ask(.stopServer(identity: server.identity)) }
 				.keyboardShortcut(".", modifiers: [.command, .option])
 				.disabled(!server.isOwned)
 
 			Divider()
 
-			Button("Set Up Server...") { windowState?.isSettingUpServer = true }
+			Button("Set Up Server…") { windowState?.isSettingUpServer = true }
 				.keyboardShortcut("s", modifiers: [.command, .option])
 				.disabled(windowState == nil)
 
-			Button("Show Server Log") { windowState?.isShowingServerLog = true }
-				.keyboardShortcut("l", modifiers: [.command, .option])
-				.disabled(windowState?.isShowingServerLog ?? true)
+			Button(windowState?.isShowingServerLog == true ? "Hide Server Log" : "Show Server Log") {
+				windowState?.isShowingServerLog.toggle()
+			}
+			.keyboardShortcut("l", modifiers: [.command, .option])
+			.disabled(windowState == nil)
 
 			Divider()
 
 			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
 				.disabled(model.configURLs.isEmpty)
+		}
+
+		CommandGroup(replacing: .help) {
+			Link("Process Compose Help", destination: URL(string: "https://github.com/thalesfp/process-compose-macos#readme")!)
 		}
 
 		CommandMenu("Log") {

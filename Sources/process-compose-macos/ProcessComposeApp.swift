@@ -17,7 +17,7 @@ struct ProcessComposeApp: App {
 	@AppStorage(PreferenceKey.logFontSize) private var logFontSize = LogFont.standard
 
 	var body: some Scene {
-		WindowGroup {
+		Window("Process Compose", id: "main") {
 			StackView(
 				model: model,
 				logModel: logModel,

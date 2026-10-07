@@ -92,7 +92,7 @@ struct ClearLogAction {
 	}
 
 	func title(_ base: String) -> String {
-		asks ? base + "..." : base
+		asks ? base + "…" : base
 	}
 
 	func perform() {
