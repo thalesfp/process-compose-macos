@@ -477,8 +477,12 @@ public final class StackViewModel {
 		isChangingStack = true
 		defer { isChangingStack = false }
 
-		guard await refreshConfigurations(for: members, from: client, observation: mine, epoch: epoch) else { return }
-		guard epoch == actionEpoch else { return }
+		guard await refreshConfigurations(for: members, from: client, observation: mine, epoch: epoch),
+			epoch == actionEpoch
+		else {
+			reportCutShort(observation: mine, epoch: epoch, verb: failureVerb)
+			return
+		}
 
 		// The stream can bring a process in while the read is out, and until it has been
 		// placed nobody can say which project it belongs to, including this action's.
@@ -511,12 +515,23 @@ public final class StackViewModel {
 		}
 
 		let blockedBy = graph.blockers(among: names, stopping: stopping)
+		var done: [String] = []
 		var failures: [String] = []
 		var skipped: [String] = []
 		var stalled: Set<String> = []
 
-		for name in names {
-			guard mine == generation, epoch == actionEpoch else { return }
+		for (index, name) in names.enumerated() {
+			guard mine == generation, epoch == actionEpoch else {
+				return reportCutShort(
+					observation: mine,
+					epoch: epoch,
+					verb: failureVerb,
+					done: done,
+					failures: failures,
+					skipped: skipped,
+					untried: Array(names[index...])
+				)
+			}
 
 			// Ordering only holds while everything before it worked: a process whose
 			// prerequisite never started would come up without it.
@@ -529,6 +544,7 @@ public final class StackViewModel {
 			busy.insert(name)
 			do {
 				try await operation(client, name)
+				done.append(name)
 			} catch {
 				failures.append(name)
 				stalled.insert(name)
@@ -546,6 +562,35 @@ public final class StackViewModel {
 		}
 
 		lastError = trouble.isEmpty ? groupingError : trouble.joined(separator: "; ")
+	}
+
+	/// Work the server changed under says how far it got. Once the app has moved to another
+	/// address that connection owns the message, so this one stays quiet.
+	private func reportCutShort(
+		observation mine: Int,
+		epoch: Int,
+		verb: String,
+		done: [String] = [],
+		failures: [String] = [],
+		skipped: [String] = [],
+		untried: [String] = []
+	) {
+		let isSameConnection = mine == generation
+		let wasAbandoned = epoch != actionEpoch
+
+		guard isSameConnection, wasAbandoned else { return }
+
+		let past = verb == "stop" ? "stopped" : "started"
+		var parts: [String] = []
+
+		if !done.isEmpty { parts.append("\(past) \(done.joined(separator: ", "))") }
+		if !failures.isEmpty { parts.append("could not \(verb) \(failures.joined(separator: ", "))") }
+		if !skipped.isEmpty { parts.append("did not \(verb) \(skipped.joined(separator: ", "))") }
+		if !untried.isEmpty { parts.append("never tried \(untried.joined(separator: ", "))") }
+
+		lastError = parts.isEmpty
+			? "The server changed before anything was sent, so nothing was \(past)"
+			: "The server changed partway through: \(parts.joined(separator: "; "))"
 	}
 
 	/// Dependency order is only as good as the configurations it was read from, and a stack

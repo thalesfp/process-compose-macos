@@ -995,6 +995,84 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("says nothing was stopped when the server changes before anything was sent")
+	func reportsAStopAbandonedBeforeItsFirstRequest() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		client.hold(["api"])
+		let bulk = Task { await viewModel.stopStack() }
+		await settle(until: { viewModel.isChangingStack })
+
+		viewModel.abandonActions()
+		client.hold([])
+		await bulk.value
+
+		#expect(client.stopped.isEmpty)
+		#expect(viewModel.lastError == "The server changed before anything was sent, so nothing was stopped")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("says how far a stop got when the server changes partway through")
+	func reportsHowFarAnInterruptedStopGot() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+		client.holdActions = true
+		let bulk = Task { await viewModel.stopStack() }
+		await settle(until: { client.stopped.count == 1 })
+
+		viewModel.abandonActions()
+		client.holdActions = false
+		await bulk.value
+
+		let first = client.stopped[0]
+		let second = first == "api" ? "worker" : "api"
+		#expect(client.stopped == [first])
+		#expect(viewModel.lastError == "The server changed partway through: stopped \(first); never tried \(second)")
+
+		client.finishStream()
+		await session.value
+	}
+
+	@Test("leaves the message to the new connection when a stop is cut short by a move")
+	func staysQuietAboutAStopCutShortByAMove() async {
+		let client = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+			.init(name: "worker", namespace: "api", status: .running, isRunning: true),
+		])
+		client.workingDirs = ["api": "acme/api", "worker": "acme/worker"]
+		let viewModel = StackViewModel(client: client)
+		viewModel.use(client, at: .standard)
+
+		await settle(viewModel)
+		client.holdActions = true
+		let bulk = Task { await viewModel.stopStack() }
+		await settle(until: { client.stopped.count == 1 })
+
+		viewModel.use(StubClient(processes: []), at: ServerAddress(host: "localhost", port: 28099))
+		client.holdActions = false
+		await bulk.value
+
+		#expect(client.stopped.count == 1)
+		#expect(viewModel.lastError?.hasPrefix("The server changed") != true)
+
+		client.finishStream()
+	}
+
 	@Test("keeps an open question when another window asks for the same server")
 	func keepsAQuestionForTheSameServer() async {
 		let client = StubClient(processes: [

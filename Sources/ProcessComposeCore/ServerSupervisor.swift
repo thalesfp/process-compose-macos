@@ -266,18 +266,28 @@ public final class ServerSupervisor {
 
 	/// The stack went away. A server the app started reports its own exit, but one started
 	/// elsewhere only shows up as a dead port, and starting one becomes the user's to do again.
+	/// A connection that drops while the server still answers is the same server, so only
+	/// a port that has gone quiet or changed hands makes this a different one.
 	public func recheck() async {
 		guard state == .running(owned: false), let address else { return }
 
 		generation += 1
-		identity += 1
 		let mine = generation
 
 		let presence = await reachability.look(at: address)
 
-		guard isCurrent(mine), presence == .nothing else { return }
+		guard isCurrent(mine) else { return }
 
-		state = .idle
+		switch presence {
+		case .processCompose:
+			return
+		case .nothing:
+			state = .idle
+		case .occupied:
+			state = .failed(reason: "Something that is not process-compose answers on port \(address.port)")
+		}
+
+		identity += 1
 	}
 
 	/// A stack started from a terminal while the app was waiting to be asked. Probing does not

@@ -390,6 +390,58 @@ struct ServerSupervisorTests {
 		#expect(supervisor.isLaunching == false)
 	}
 
+	@Test("keeps its identity when the server it attached to still answers after a drop")
+	func keepsItsIdentityThroughADrop() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let attached = supervisor.identity
+
+		await supervisor.recheck()
+
+		#expect(supervisor.identity == attached)
+		#expect(supervisor.state == .running(owned: false))
+	}
+
+	@Test("takes a new identity once the server it attached to is gone")
+	func changesIdentityWhenTheAttachedServerIsGone() async {
+		let reachability = FakeReachability(true)
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: reachability,
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		let attached = supervisor.identity
+		reachability.presence = .nothing
+
+		await supervisor.recheck()
+
+		#expect(supervisor.identity != attached)
+	}
+
+	@Test("says the port is taken when something else answers where the attached server was")
+	func reportsAPortTakenAfterTheAttachedServer() async {
+		let reachability = FakeReachability(true)
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: reachability,
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		reachability.presence = .occupied
+
+		await supervisor.recheck()
+
+		#expect(supervisor.state == .failed(reason: "Something that is not process-compose answers on port 28080"))
+	}
+
 	@Test("says what is wrong with the config instead of starting it")
 	func refusesAConfigThatWillNotLoad() async {
 		let runner = FakeRunner()
