@@ -14,11 +14,13 @@ fi
 VERSION="${PROCESS_COMPOSE_MACOS_VERSION:-0.2.0}"
 APP="build/$APP_NAME"
 
-swift build -c release
+BUILD=(swift build -c release --arch arm64 --arch x86_64)
+"${BUILD[@]}"
+BIN_DIR="$("${BUILD[@]}" --show-bin-path)"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/process-compose-macos "$APP/Contents/MacOS/process-compose-macos"
+cp "$BIN_DIR/process-compose-macos" "$APP/Contents/MacOS/process-compose-macos"
 cp Resources/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -56,8 +58,12 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature: enough for a locally built app, and it keeps the firewall
-# from re-prompting on every rebuild.
-codesign --force --sign - "$APP" > /dev/null
+if [ -n "${CODESIGN_IDENTITY:-}" ]; then
+	codesign --force --options runtime --timestamp --sign "$CODESIGN_IDENTITY" "$APP" > /dev/null
+else
+	# Ad-hoc signature: enough for a locally built app, and it keeps the firewall
+	# from re-prompting on every rebuild.
+	codesign --force --sign - "$APP" > /dev/null
+fi
 
 echo "built $APP"
