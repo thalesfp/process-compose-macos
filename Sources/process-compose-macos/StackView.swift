@@ -230,6 +230,11 @@ struct StackView: View {
 			}
 		}
 
+		// macOS 27 packs a .primaryAction item against a centered .status item without this.
+		ToolbarItem(placement: .automatic) {
+			Spacer()
+		}
+
 		ToolbarItem(placement: .primaryAction) {
 			powerControl
 		}
