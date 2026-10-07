@@ -1544,6 +1544,49 @@ struct ProcessStateTests {
 		#expect(state.indicator == .idle)
 	}
 
+	@Test("speaks a running service as one sentence with its readiness and usage")
+	func speaksARunningService() {
+		let state = ProcessState(
+			name: "api",
+			status: .running,
+			readiness: "Ready",
+			hasReadinessProbe: true,
+			memoryBytes: 140_000_000,
+			cpuPercent: 3.5,
+			isRunning: true,
+			ageNanoseconds: 61_000_000_000
+		)
+
+		let summary = state.spokenSummary(kind: .service)
+
+		let usage = "up \(Duration.seconds(61).compactLabel), 3.5% processor, \(ResourceFormat.memory(140_000_000)) memory"
+		#expect(summary == "api, service, Running, ready, \(usage)")
+	}
+
+	@Test("speaks a failed task's exit code and what set it off")
+	func speaksAFailedTask() {
+		let state = ProcessState(
+			name: "migrate",
+			status: .completed,
+			exitCode: 1,
+			isWatched: true,
+			watchTriggerPath: "db/schema.sql"
+		)
+
+		let summary = state.spokenSummary(kind: .task)
+
+		#expect(summary == "migrate, task, Completed, file watcher armed, triggered by db/schema.sql, exit code 1")
+	}
+
+	@Test("leaves a stopped service's signal exit unspoken")
+	func leavesASignalledStopUnspoken() {
+		let state = ProcessState(name: "worker", status: .completed, restarts: 2, exitCode: -1)
+
+		let summary = state.spokenSummary(kind: .service)
+
+		#expect(summary == "worker, service, Completed, 2 restarts")
+	}
+
 	@Test("a running process with an unsatisfied probe still reads as waiting")
 	func unreadyProbeIsWaiting() {
 		let state = ProcessState(

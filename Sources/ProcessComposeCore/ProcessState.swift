@@ -185,6 +185,28 @@ extension ProcessState {
 	}
 	public var canStop: Bool { isRunning }
 
+	/// What a screen reader says for a row: the facts the row shows, in the order it shows them.
+	public func spokenSummary(kind: ProcessKind) -> String {
+		var parts = [name, kind.rawValue, status.rawValue]
+
+		let showsReadiness = hasReadinessProbe && isRunning
+		if showsReadiness { parts.append(isReady ? "ready" : "starting") }
+
+		if isWatched { parts.append("file watcher armed") }
+
+		if restarts > 0 { parts.append(restarts == 1 ? "1 restart" : "\(restarts) restarts") }
+
+		if kind == .task, let trigger = watchTriggerPath { parts.append("triggered by \(trigger)") }
+
+		let showsExit = kind == .task ? hasRun : hasRun && exitedWithError
+		if showsExit { parts.append("exit code \(exitCode)") }
+
+		let showsUsage = kind == .service && isRunning
+		if showsUsage { parts.append("up \(age.compactLabel), \(cpuLabel) processor, \(memoryLabel) memory") }
+
+		return parts.joined(separator: ", ")
+	}
+
 	/// Startable and not switched off by the config. Turning a disabled process on is a
 	/// decision made on its own row, so nothing that starts a group of them includes it.
 	public var isStartable: Bool { canStart && status != .disabled }

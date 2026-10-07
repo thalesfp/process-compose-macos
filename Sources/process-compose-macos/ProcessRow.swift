@@ -38,6 +38,15 @@ struct ProcessRow: View {
 			controls
 		}
 		.padding(.vertical, 4)
+		.accessibilityElement(children: .ignore)
+		.accessibilityLabel(state.spokenSummary(kind: kind))
+		.accessibilityActions {
+			if !isBusy, canStart { Button("Start", action: start) }
+			if !isBusy, canStop {
+				Button("Restart", action: restart)
+				Button("Stop", action: stop)
+			}
+		}
 	}
 
 	@ViewBuilder
@@ -54,20 +63,17 @@ struct ProcessRow: View {
 					.font(.callout)
 					.foregroundStyle(.blue)
 					.help("A file watcher is armed")
-					.accessibilityLabel("File watcher armed")
 			}
 			if state.restarts > 0 {
 				Text("↺\(state.restarts)")
 					.font(.callout)
 					.foregroundStyle(.orange)
 					.help("\(state.restarts) restarts")
-					.accessibilityLabel("\(state.restarts) restarts")
 			}
 			if kind != .task, state.hasRun, state.exitedWithError {
 				Text("exit \(state.exitCode)")
 					.font(.callout)
 					.foregroundStyle(.red)
-					.accessibilityLabel("Exit code \(state.exitCode)")
 			}
 		}
 		.frame(width: 130, alignment: .leading)
@@ -101,7 +107,6 @@ struct ProcessRow: View {
 				.foregroundStyle(state.isCPUSaturated ? Color.orange : Color.secondary)
 			Text(memory)
 		}
-		.accessibilityLabel("Up \(age), \(cpu) processor, \(memory) memory")
 	}
 
 	/// A task's facts are what it last did and what set it off.
@@ -127,21 +132,17 @@ struct ProcessRow: View {
 			ProgressView()
 				.controlSize(.small)
 				.frame(width: Self.controlsWidth)
-				.accessibilityLabel("Working on \(state.name)")
 		} else {
 			HStack(spacing: 2) {
 				Button(action: start) { Image(systemName: "play.fill") }
 					.disabled(!canStart)
 					.help("Start")
-					.accessibilityLabel("Start \(state.name)")
 				Button(action: restart) { Image(systemName: "arrow.clockwise") }
 					.disabled(!canStop)
 					.help("Restart")
-					.accessibilityLabel("Restart \(state.name)")
 				Button(action: stop) { Image(systemName: "stop.fill") }
 					.disabled(!canStop)
 					.help("Stop")
-					.accessibilityLabel("Stop \(state.name)")
 			}
 			.buttonStyle(RowActionButtonStyle())
 			.frame(width: Self.controlsWidth, alignment: .trailing)
