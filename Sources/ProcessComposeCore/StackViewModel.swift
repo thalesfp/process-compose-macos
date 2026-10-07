@@ -304,17 +304,22 @@ public final class StackViewModel {
 		}
 	}
 
-	/// The server is not this model's to stop, so `.stopServer` is the window's to dispatch.
+	/// The server and the log are not this model's, so `.stopServer` and `.clearLog` are the
+	/// window's to dispatch.
 	public func perform(_ confirmation: Confirmation) async {
-		// The question was asked before this work was abandoned, so its answer is void.
-		guard confirmation.epoch == actionEpoch else { return }
+		guard isStanding(confirmation) else { return }
 
 		switch confirmation.target {
 		case .stopStack(let promised): await stopStack(promised: promised)
 		case .stopProject(let name, let promised): await stopProject(name, promised: promised)
 		case .startProject(let name, let missing): await startProject(name, promisedMissing: missing)
-		case .stopServer: break
+		case .stopServer, .clearLog: break
 		}
+	}
+
+	/// False once the work the question was asked about has been abandoned, which voids the answer.
+	public func isStanding(_ confirmation: Confirmation) -> Bool {
+		confirmation.epoch == actionEpoch
 	}
 
 	/// Starting asks first only when the project would come up without something it

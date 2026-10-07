@@ -6,6 +6,8 @@ public enum ConfirmTarget: Sendable, Equatable {
 	/// Carries the server the question was asked about, so the answer cannot land on another.
 	case stopServer(identity: Int)
 	case startProject(String, missing: [String])
+	/// process-compose deletes the log it holds, so every client reading it loses it too.
+	case clearLog(String)
 
 	/// Starting is the only one of these that does not take something away.
 	public var isDestructive: Bool {
@@ -55,6 +57,18 @@ public enum ConfirmationWording {
 			let verb = named.count == 1 ? "is" : "are"
 
 			return "\(name) depends on \(named.joined(separator: ", ")), which \(verb) not running. Start \(name) anyway?"
+		case .clearLog(let name):
+			return "Clear the log of \(name)?"
+		}
+	}
+
+	/// What a question has to add that does not fit in the question itself.
+	public static func detail(for target: ConfirmTarget) -> String? {
+		switch target {
+		case .clearLog:
+			"The server deletes it, so the terminal UI and anything else reading it lose it too."
+		case .stopStack, .stopProject, .stopServer, .startProject:
+			nil
 		}
 	}
 
@@ -65,6 +79,7 @@ public enum ConfirmationWording {
 		case .stopProject(let name, _): "Stop \(name)"
 		case .stopServer: "Stop the server"
 		case .startProject(let name, _): "Start \(name)"
+		case .clearLog: "Clear Log"
 		}
 	}
 

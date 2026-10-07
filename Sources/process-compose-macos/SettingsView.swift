@@ -66,6 +66,7 @@ private struct LogSettings: View {
 	@AppStorage(PreferenceKey.logFontSize) private var fontSize = LogFont.standard
 	@AppStorage(PreferenceKey.logBufferLines) private var bufferLines = PreferenceDefault.logBufferLines
 	@AppStorage(PreferenceKey.logBackfill) private var backfill = PreferenceDefault.logBackfill
+	@AppStorage(PreferenceKey.asksBeforeClearingLog) private var asksBeforeClearingLog = true
 
 	var body: some View {
 		Form {
@@ -85,6 +86,7 @@ private struct LogSettings: View {
 
 				TextField("Lines kept", value: $bufferLines, format: .number)
 				TextField("Lines replayed on open", value: $backfill, format: .number)
+				Toggle("Ask before clearing a log", isOn: $asksBeforeClearingLog)
 			} footer: {
 				Text("The app keeps this many lines per process in memory and asks the server to replay the newest ones when a log opens.")
 					.font(.caption)

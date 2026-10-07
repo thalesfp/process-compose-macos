@@ -18,6 +18,7 @@ enum PreferenceKey {
 	static let suggestedConfigPath = "suggestedConfigPath"
 	static let serverWorkingDirectory = "serverWorkingDirectory"
 	static let sidebarVisible = "sidebarVisible"
+	static let asksBeforeClearingLog = "asksBeforeClearingLog"
 }
 
 enum PreferenceDefault {

@@ -1110,6 +1110,18 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("voids a log clear agreed to before the server was replaced")
+	func voidsAClearLogAnswerAfterAbandonment() {
+		let viewModel = StackViewModel(client: StubClient(processes: []))
+
+		viewModel.ask(.clearLog("api"))
+		let captured = try! #require(viewModel.confirmation)
+
+		viewModel.abandonActions()
+
+		#expect(viewModel.isStanding(captured) == false)
+	}
+
 	@Test("lets go of a selected process a reload moved out of the project")
 	func clearsASelectionAReloadMovedAway() async {
 		let client = StubClient(processes: [

@@ -4,6 +4,7 @@ import SwiftUI
 struct LogPane: View {
 	@Bindable var model: LogViewModel
 	let windowState: WindowState
+	let clear: ClearLogAction
 
 	@AppStorage(PreferenceKey.logFontSize) private var fontSize = LogFont.standard
 
@@ -61,9 +62,9 @@ struct LogPane: View {
 				.controlSize(.small)
 				.font(.caption)
 
-			Button("Clear") { Task { await model.clear() } }
+			Button(clear.title("Clear")) { clear.perform() }
 				.controlSize(.small)
-				.disabled(model.selected == nil)
+				.disabled(!clear.isEnabled)
 		}
 		.padding(.horizontal, 12)
 		.padding(.vertical, 7)
@@ -76,6 +77,33 @@ struct LogPane: View {
 		} else {
 			FilteredLog(lines: visible, filter: model.filter, fontSize: fontSize, isFollowing: model.isFollowing)
 		}
+	}
+}
+
+/// Clear, from the pane and the Log menu. It asks first unless the user said not to.
+@MainActor
+struct ClearLogAction {
+	let model: StackViewModel
+	let logModel: LogViewModel
+	let asks: Bool
+
+	var isEnabled: Bool {
+		logModel.selected != nil
+	}
+
+	func title(_ base: String) -> String {
+		asks ? base + "..." : base
+	}
+
+	func perform() {
+		guard let name = logModel.selected else { return }
+
+		guard asks else {
+			Task { await logModel.clear() }
+			return
+		}
+
+		model.ask(.clearLog(name))
 	}
 }
 

@@ -14,6 +14,7 @@ struct StackCommands: Commands {
 
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
 	@AppStorage(PreferenceKey.splitFraction) private var splitFraction = PreferenceDefault.splitFraction
+	@AppStorage(PreferenceKey.asksBeforeClearingLog) private var asksBeforeClearingLog = true
 
 	var body: some Commands {
 		CommandGroup(replacing: .newItem) {}
@@ -120,14 +121,18 @@ struct StackCommands: Commands {
 			Toggle("Follow", isOn: $logModel.isFollowing)
 				.keyboardShortcut("f", modifiers: [.command, .shift])
 
-			Button("Clear Log") { Task { await logModel.clear() } }
+			Button(clearLog.title("Clear Log")) { clearLog.perform() }
 				.keyboardShortcut("k", modifiers: .command)
-				.disabled(logModel.selected == nil)
+				.disabled(!clearLog.isEnabled)
 		}
 	}
 
 	private var power: PowerAction {
 		PowerAction(model: model, server: server)
+	}
+
+	private var clearLog: ClearLogAction {
+		ClearLogAction(model: model, logModel: logModel, asks: asksBeforeClearingLog)
 	}
 
 	private func title(_ verb: String) -> String {

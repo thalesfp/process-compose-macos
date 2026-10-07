@@ -24,6 +24,7 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.serverWorkingDirectory) private var workingDirectory = PreferenceDefault.serverWorkingDirectory
 	@AppStorage(PreferenceKey.suggestedConfigPath) private var suggestedConfig = PreferenceDefault.suggestedConfigPath
 	@AppStorage(PreferenceKey.sidebarVisible) private var isSidebarVisible = true
+	@AppStorage(PreferenceKey.asksBeforeClearingLog) private var asksBeforeClearingLog = true
 
 	var body: some View {
 		NavigationSplitView(columnVisibility: columnVisibility) {
@@ -39,11 +40,22 @@ struct StackView: View {
 						windowState: windowState
 					) { windowState.isShowingServerLog = false }
 				} else {
-					LogPane(model: logModel, windowState: windowState)
+					LogPane(model: logModel, windowState: windowState, clear: clearLog)
 				}
 			}
 			.overlay(alignment: .bottom) { errorBar }
 			.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
+			// dialogSuppressionToggle reaches every dialog presented within the view it modifies.
+			.confirmationDialog(
+				model.confirmation.map { model.question(for: $0.target) } ?? "",
+				isPresented: isConfirming(clearingLog: true),
+				presenting: model.confirmation
+			) { confirmation in
+				answerButton(for: confirmation)
+			} message: { confirmation in
+				detail(for: confirmation)
+			}
+			.dialogSuppressionToggle(isSuppressed: isClearLogQuestionSuppressed)
 		}
 		.focusedSceneValue(\.windowState, windowState)
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
@@ -84,29 +96,68 @@ struct StackView: View {
 		.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
 		.confirmationDialog(
 			model.confirmation.map { model.question(for: $0.target) } ?? "",
-			isPresented: isConfirming,
+			isPresented: isConfirming(clearingLog: false),
 			presenting: model.confirmation
 		) { confirmation in
-			Button(model.answer(for: confirmation.target), role: confirmation.target.isDestructive ? .destructive : nil) {
-				Task {
-					// Only the server is not this model's to stop.
-					if case .stopServer(let identity) = confirmation.target {
-						await server.stop(expecting: identity)
-					} else {
-						await model.perform(confirmation)
-					}
-				}
-			}
+			answerButton(for: confirmation)
+		} message: { confirmation in
+			detail(for: confirmation)
 		}
 	}
 
 	/// The dialog is raised by whatever names a target, and dismissing it clears the
 	/// name rather than leaving a stop the user backed out of pending.
-	private var isConfirming: Binding<Bool> {
+	private func isConfirming(clearingLog: Bool) -> Binding<Bool> {
 		Binding(
-			get: { model.confirmation != nil },
+			get: { model.confirmation.map { Self.clearsLog($0.target) == clearingLog } ?? false },
 			set: { if !$0 { model.confirmation = nil } }
 		)
+	}
+
+	private static func clearsLog(_ target: ConfirmTarget) -> Bool {
+		if case .clearLog = target { return true }
+		return false
+	}
+
+	private var isClearLogQuestionSuppressed: Binding<Bool> {
+		Binding(
+			get: { !asksBeforeClearingLog },
+			set: { asksBeforeClearingLog = !$0 }
+		)
+	}
+
+	private func answerButton(for confirmation: Confirmation) -> some View {
+		Button(model.answer(for: confirmation.target), role: confirmation.target.isDestructive ? .destructive : nil) {
+			Task { await answer(confirmation) }
+		}
+	}
+
+	@ViewBuilder
+	private func detail(for confirmation: Confirmation) -> some View {
+		if let detail = ConfirmationWording.detail(for: confirmation.target) {
+			Text(detail)
+		}
+	}
+
+	/// The server and the log are not the stack model's, so the window acts on those two.
+	private func answer(_ confirmation: Confirmation) async {
+		switch confirmation.target {
+		case .stopServer(let identity):
+			await server.stop(expecting: identity)
+		case .clearLog(let name):
+			let isStanding = model.isStanding(confirmation)
+			let isSameLog = logModel.selected == name
+
+			guard isStanding, isSameLog else { return }
+
+			await logModel.clear()
+		case .stopStack, .stopProject, .startProject:
+			await model.perform(confirmation)
+		}
+	}
+
+	private var clearLog: ClearLogAction {
+		ClearLogAction(model: model, logModel: logModel, asks: asksBeforeClearingLog)
 	}
 
 	/// The toolbar button and the View menu item both collapse the sidebar, so the

@@ -60,12 +60,30 @@ struct ConfirmationWordingTests {
 			== "acme depends on db in acme, cache in acme, which are not running. Start acme anyway?")
 	}
 
+	@Test("asks about clearing a log by the process it belongs to")
+	func asksAboutClearingALog() {
+		#expect(question(.clearLog("api")) == "Clear the log of api?")
+	}
+
+	@Test("says that clearing a log takes it from every client")
+	func explainsWhoLosesAClearedLog() {
+		let detail = ConfirmationWording.detail(for: .clearLog("api"))
+
+		#expect(detail?.contains("terminal UI") == true)
+	}
+
+	@Test("adds nothing to a question that says it all")
+	func addsNoDetailToAStop() {
+		#expect(ConfirmationWording.detail(for: .stopStack(promised: ["api"])) == nil)
+	}
+
 	@Test("names on the answer button what the question was about")
 	func namesTheSubjectOnTheButton() {
 		#expect(ConfirmationWording.answer(for: .stopStack(promised: [])) == "Stop the stack")
 		#expect(ConfirmationWording.answer(for: .stopProject("acme", promised: [])) == "Stop acme")
 		#expect(ConfirmationWording.answer(for: .stopServer(identity: 0)) == "Stop the server")
 		#expect(ConfirmationWording.answer(for: .startProject("acme", missing: [])) == "Start acme")
+		#expect(ConfirmationWording.answer(for: .clearLog("api")) == "Clear Log")
 	}
 
 	@Test("marks everything but a start as destructive")
@@ -73,6 +91,7 @@ struct ConfirmationWordingTests {
 		#expect(ConfirmTarget.stopStack(promised: []).isDestructive)
 		#expect(ConfirmTarget.stopProject("acme", promised: []).isDestructive)
 		#expect(ConfirmTarget.stopServer(identity: 0).isDestructive)
+		#expect(ConfirmTarget.clearLog("api").isDestructive)
 		#expect(!ConfirmTarget.startProject("acme", missing: []).isDestructive)
 	}
 }
