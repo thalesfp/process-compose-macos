@@ -49,8 +49,9 @@ struct ServerSupervisorTests {
 		await supervisor.start()
 		let stale = supervisor.identity - 1
 
-		await supervisor.stop(expecting: stale)
+		let outcome = await supervisor.stop(expecting: stale)
 
+		#expect(outcome == .identityChanged)
 		#expect(supervisor.state == .running(owned: true))
 
 		await supervisor.stop(expecting: supervisor.identity)
@@ -370,6 +371,167 @@ struct ServerSupervisorTests {
 		#expect(supervisor.wouldStop(movingTo: ServerAddress(host: "localhost", port: 28099)) == false)
 	}
 
+	@Test("reports that it stopped the server it started")
+	func reportsAStoppedServer() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		let outcome = await supervisor.stop()
+
+		#expect(outcome == .stopped)
+	}
+
+	@Test("reports nothing to stop when it holds no server")
+	func reportsNothingToStop() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+		await supervisor.use(address: .standard, plan: .test)
+
+		let outcome = await supervisor.stop()
+
+		#expect(outcome == .nothingToStop)
+	}
+
+	@Test("reports a stack that survived the attempt to stop it")
+	func reportsAStackThatWouldNotStop() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		runner.ignoresKill = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore(),
+			grace: .milliseconds(100)
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		let outcome = await supervisor.stop()
+
+		#expect(outcome == .stillRunning)
+	}
+
+	@Test("tells everyone waiting on one shutdown how that shutdown went")
+	func sharesOneShutdownsOutcome() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		runner.ignoresKill = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore(),
+			grace: .milliseconds(100)
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		let first = Task { await supervisor.stop() }
+		await settle(until: { supervisor.isStopping })
+		let second = await supervisor.stop()
+
+		#expect(await first.value == .stillRunning)
+		#expect(second == .stillRunning)
+	}
+
+	@Test("says it is stopping while a shutdown is under way")
+	func reportsAShutdownUnderWay() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore(),
+			grace: .milliseconds(100)
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		let stopping = Task { await supervisor.stop() }
+		await settle(until: { supervisor.isStopping })
+		let wasStopping = supervisor.isStopping
+		_ = await stopping.value
+
+		#expect(wasStopping)
+		#expect(supervisor.isStopping == false)
+	}
+
+	@Test("starts nothing while a shutdown is under way")
+	func refusesToStartWhileStopping() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore(),
+			grace: .milliseconds(100)
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		let stopping = Task { await supervisor.stop() }
+		await settle(until: { supervisor.isStopping })
+		await supervisor.start()
+		_ = await stopping.value
+
+		#expect(runner.launched.count == 1)
+	}
+
+	@Test("calls off a launch still being checked when asked to stop")
+	func callsOffALaunchWhenStopped() async {
+		let runner = FakeRunner()
+		var isChecking = false
+		var isReleased = false
+		runner.whileValidating = { isChecking = true }
+		runner.validationGate = {
+			while !isReleased {
+				try? await Task.sleep(for: .milliseconds(5))
+			}
+		}
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+		await supervisor.use(address: .standard, plan: .test)
+
+		let starting = Task { await supervisor.start() }
+		await settle(until: { isChecking })
+		await supervisor.stop()
+		isReleased = true
+		await starting.value
+
+		#expect(runner.launched.isEmpty)
+		#expect(supervisor.state == .idle)
+	}
+
+	@Test("stays on the old address when its stack would not stop")
+	func staysWhenTheOldStackWouldNotStop() async {
+		let runner = FakeRunner()
+		runner.ignoresTerminate = true
+		runner.ignoresKill = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore(),
+			grace: .milliseconds(100)
+		)
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		await supervisor.use(address: ServerAddress(host: "localhost", port: 28099), plan: .test)
+
+		#expect(supervisor.state == .failed(reason: "The stack is still running and could not be stopped"))
+		#expect(supervisor.wouldStop(movingTo: ServerAddress(host: "localhost", port: 28099)) == false)
+	}
+
 	@Test("says it is starting while a launch is under way")
 	func reportsALaunchUnderWay() async {
 		let runner = FakeRunner()
@@ -564,7 +726,7 @@ struct ServerSupervisorTests {
 
 		let stopping = Task { await supervisor.stop() }
 		stopping.cancel()
-		await stopping.value
+		_ = await stopping.value
 
 		#expect(runner.started?.didTerminate == true)
 		#expect(supervisor.state == .idle)
@@ -1268,9 +1430,12 @@ private final class FakeRunner: ServerRunner {
 	}
 
 	nonisolated(unsafe) var whileValidating: (() -> Void)?
+	/// Keeps a check open until it returns, so a test can act while a launch is still deciding.
+	nonisolated(unsafe) var validationGate: (@MainActor () async -> Void)?
 
 	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
 		whileValidating?()
+		await validationGate?()
 
 		return validation
 	}

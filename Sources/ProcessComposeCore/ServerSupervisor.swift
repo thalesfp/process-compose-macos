@@ -11,6 +11,16 @@ public enum ServerLifecycle: Sendable, Equatable {
 	case failed(reason: String)
 }
 
+/// How a request to stop the server ended.
+public enum StopOutcome: Sendable, Equatable {
+	case stopped
+	/// Something in the stack survived SIGKILL, and its record is kept so it can be found again.
+	case stillRunning
+	case nothingToStop
+	/// The question was about a server that has since been replaced, so nothing was stopped.
+	case identityChanged
+}
+
 /// What is on an address.
 public enum ServerPresence: Sendable, Equatable {
 	case nothing
@@ -69,7 +79,7 @@ public final class ServerSupervisor {
 	private let owner: ServerOwner
 
 	private var watchTask: Task<Void, Never>?
-	private var stopTask: Task<Void, Never>?
+	private var stopTask: Task<StopOutcome, Never>?
 	private var launchTask: Task<Void, Never>?
 	private var useTask: Task<Void, Never>?
 	private var useInputs: Inputs?
@@ -114,10 +124,11 @@ public final class ServerSupervisor {
 
 	/// Stops the server the caller was looking at, and nothing else. Both this and `stop`
 	/// run on the main actor, so nothing can point the supervisor elsewhere in between.
-	public func stop(expecting identity: Int) async {
-		guard identity == self.identity else { return }
+	@discardableResult
+	public func stop(expecting identity: Int) async -> StopOutcome {
+		guard identity == self.identity else { return .identityChanged }
 
-		await stop()
+		return await stop()
 	}
 
 	public var isOwned: Bool {
@@ -126,6 +137,10 @@ public final class ServerSupervisor {
 
 	public var isLaunching: Bool {
 		launchTask != nil
+	}
+
+	public var isStopping: Bool {
+		stopTask != nil
 	}
 
 	/// Whether pointing at `address` takes down the stack this app started. An address the
@@ -137,7 +152,7 @@ public final class ServerSupervisor {
 	}
 
 	public var canStart: Bool {
-		guard plan != nil, address?.isLoopback == true else { return false }
+		guard plan != nil, address?.isLoopback == true, !isStopping else { return false }
 
 		switch state {
 		case .idle, .failed: return true
@@ -187,7 +202,7 @@ public final class ServerSupervisor {
 	private func apply(_ wanted: Inputs, generation mine: Int) async {
 		// A shutdown can take a minute, and the settings can come back to where they started
 		// in that time. Waiting here is what keeps the two from overlapping.
-		if let stopTask { await stopTask.value }
+		if let stopTask { _ = await stopTask.value }
 
 		guard isCurrent(mine) else { return }
 
@@ -200,9 +215,12 @@ public final class ServerSupervisor {
 		}
 
 		if address != self.address || wanted.plan != plan {
-			await stop()
+			let outcome = await stopServer()
 
 			guard isCurrent(mine) else { return }
+
+			// Moving on would leave the stack that would not stop with nothing pointing at it.
+			guard outcome != .stillRunning else { return }
 		}
 
 		self.address = address
@@ -305,24 +323,33 @@ public final class ServerSupervisor {
 		attach(on: address)
 	}
 
+	/// Stopping on request also calls off a launch or attach still under way, since that
+	/// work is for the stack the user is stopping.
+	@discardableResult
+	public func stop() async -> StopOutcome {
+		generation += 1
+
+		return await stopServer()
+	}
+
 	/// Shutting a stack down outlives whoever asked for it: a settings edit that cancels its
 	/// own task must not leave process-compose half way through stopping its processes.
-	public func stop() async {
-		if let stopTask {
-			await stopTask.value
-			return
-		}
+	/// Everyone waiting on one shutdown is told how that shutdown went.
+	private func stopServer() async -> StopOutcome {
+		if let stopTask { return await stopTask.value }
 
 		let stopping = Task { await self.shutDown() }
 		stopTask = stopping
-		await stopping.value
+		let outcome = await stopping.value
 		stopTask = nil
+
+		return outcome
 	}
 
-	private func shutDown() async {
+	private func shutDown() async -> StopOutcome {
 		guard let server else {
 			state = .idle
-			return
+			return .nothingToStop
 		}
 
 		let leaving = server
@@ -342,14 +369,16 @@ public final class ServerSupervisor {
 		// leave nothing able to find it again.
 		guard !server.isRunning else {
 			state = .failed(reason: "The stack is still running and could not be stopped")
-			return
+			return .stillRunning
 		}
 
 		// Another server may have been started while this one was being stopped, and it is
 		// not this shutdown's to retire. The watcher may already have let this one go.
-		guard self.server === leaving || self.server == nil else { return }
+		guard self.server === leaving || self.server == nil else { return .stopped }
 
 		release()
+
+		return .stopped
 	}
 
 	/// A quit the app never sees coming, such as a log out, cannot await, so this waits in
@@ -560,10 +589,8 @@ public final class ServerSupervisor {
 			} catch {
 				let failure = "Could not record the server: \(error.localizedDescription)"
 
-				await shutDown()
-
 				// A stack that would not stop has its own answer, which is the one to keep.
-				if case .failed = state { return }
+				guard await shutDown() != .stillRunning else { return }
 
 				state = .failed(reason: failure)
 				return

@@ -12,7 +12,7 @@ struct PowerAction {
 	}
 
 	var isWorking: Bool {
-		model.isChangingStack || server.isLaunching
+		model.isChangingStack || server.isLaunching || server.isStopping
 	}
 
 	var isEnabled: Bool {
