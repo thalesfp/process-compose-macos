@@ -34,8 +34,8 @@ Settings (Cmd+,) sets it from then on.
 ## Starting the server
 
 Set Up Server, in the window and in the Server menu, asks for a `process-compose` binary, a
-project config and a working directory, checks the config, and saves. With those set, the
-app starts the server itself when nothing answers the port. It runs
+project config and a working directory, checks the config, and saves. With those set, Start
+Stack starts the server when nothing answers the port. The app never starts one on its own. It runs
 `process-compose up -f <config> -p <port> -t=false --keep-project`, shows the server's
 output in the log pane, and stops the server when the app quits. A pid file under
 Application Support lets the next launch take back a server left behind by a crash.

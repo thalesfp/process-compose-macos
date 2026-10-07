@@ -55,7 +55,7 @@ public struct LiveServerReachability: ServerReachability {
 }
 
 /// Owns the server process itself: attaches to one already on the port, starts one when
-/// nothing answers, and stops the one it started.
+/// asked, and stops the one it started.
 @MainActor
 @Observable
 public final class ServerSupervisor {
@@ -122,6 +122,10 @@ public final class ServerSupervisor {
 
 	public var isOwned: Bool {
 		state == .running(owned: true)
+	}
+
+	public var isLaunching: Bool {
+		launchTask != nil
 	}
 
 	public var canStart: Bool {
@@ -223,12 +227,23 @@ public final class ServerSupervisor {
 			return
 		}
 
-		guard let plan = wanted.plan else {
+		guard wanted.plan != nil else {
 			state = .unconfigured
 			return
 		}
 
-		await launch(plan, generation: mine)
+		await resumeRecorded(at: address, generation: mine)
+	}
+
+	/// A stack an earlier run left going is already on, so taking it back is not starting one.
+	private func resumeRecorded(at address: ServerAddress, generation mine: Int) async {
+		let claim = records.load(port: address.port) == nil ? nil : await claimLaunch(port: address.port)
+
+		guard isCurrent(mine) else { return }
+
+		if let claim, settleRecorded(port: address.port, under: claim) { return }
+
+		state = .idle
 	}
 
 	/// Starts the configured server on request, after a failure or after the user stopped it.
@@ -255,6 +270,21 @@ public final class ServerSupervisor {
 		guard isCurrent(mine), presence == .nothing else { return }
 
 		state = .idle
+	}
+
+	/// A stack started from a terminal while the app was waiting to be asked. Probing does not
+	/// take the generation, so a launch the user asked for in the meantime is not abandoned.
+	public func attachIfAnswering() async {
+		guard state == .idle, let address else { return }
+
+		let mine = generation
+
+		let presence = await reachability.look(at: address)
+
+		guard isCurrent(mine), state == .idle, presence == .processCompose else { return }
+
+		identity += 1
+		attach(on: address)
 	}
 
 	/// Shutting a stack down outlives whoever asked for it: a settings edit that cancels its
@@ -400,6 +430,29 @@ public final class ServerSupervisor {
 		return true
 	}
 
+	/// A server that is up but not answering yet still owns the port, and starting a second
+	/// one would only replace the record that makes the first recoverable. Says whether the
+	/// recorded stack decided the state.
+	private func settleRecorded(port: Int, under claim: ServerLaunchClaim) -> Bool {
+		guard let recorded = records.load(port: port) else { return false }
+
+		if recorded.owner != owner, runner.isRunning(recorded.owner) {
+			state = .running(owned: false)
+			return true
+		}
+
+		if takeOver(port: port, under: claim) { return true }
+
+		// The recorded stack is still there but could not be taken over. Starting a second
+		// one would replace the only record that can still find the first.
+		if runner.isStackRunning(recorded.membership) {
+			state = .failed(reason: "A server is already running on port \(port) that this app cannot take over")
+			return true
+		}
+
+		return false
+	}
+
 	/// One launch at a time. A second attempt while the first is still deciding would race it
 	/// for the claim, and the claim is the thing that says only one server starts.
 	private func launch(_ plan: ServerLaunchPlan, generation mine: Int) async {
@@ -468,25 +521,7 @@ public final class ServerSupervisor {
 
 		guard isCurrent(mine) else { return }
 
-		// A server that is up but not answering yet still owns the port, and starting a
-		// second one would only replace the record that makes the first recoverable.
-		if let recorded = records.load(port: plan.port) {
-			if recorded.owner != owner, runner.isRunning(recorded.owner) {
-				state = .running(owned: false)
-				return
-			}
-
-			if takeOver(port: plan.port, under: claim) { return }
-
-			// The recorded stack is still there but could not be taken over. Starting a
-			// second one would replace the only record that can still find the first.
-			if runner.isStackRunning(recorded.membership) {
-				state = .failed(
-					reason: "A server is already running on port \(plan.port) that this app cannot take over"
-				)
-				return
-			}
-		}
+		if settleRecorded(port: plan.port, under: claim) { return }
 
 		do {
 			let started = try runner.run(plan)

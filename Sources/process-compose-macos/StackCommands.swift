@@ -80,9 +80,9 @@ struct StackCommands: Commands {
 
 			Divider()
 
-			Button(model.power == .canStop ? "Stop Stack..." : "Start Stack") { model.togglePower() }
+			Button(power.title) { power.perform() }
 				.keyboardShortcut(".", modifiers: [.command, .control])
-				.disabled(!model.canChangePower)
+				.disabled(!power.isEnabled)
 		}
 
 		CommandMenu("Server") {
@@ -124,6 +124,10 @@ struct StackCommands: Commands {
 				.keyboardShortcut("k", modifiers: .command)
 				.disabled(logModel.selected == nil)
 		}
+	}
+
+	private var power: PowerAction {
+		PowerAction(model: model, server: server)
 	}
 
 	private func title(_ verb: String) -> String {

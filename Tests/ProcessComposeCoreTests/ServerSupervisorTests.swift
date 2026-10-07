@@ -46,6 +46,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		let stale = supervisor.identity - 1
 
 		await supervisor.stop(expecting: stale)
@@ -83,6 +84,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		let running = supervisor.identity
 
 		// The server going is itself a change: `stop` does not bump the counter on its own,
@@ -143,8 +145,24 @@ struct ServerSupervisorTests {
 		#expect(records.record != nil)
 	}
 
-	@Test("starts the configured server when nothing answers the port")
-	func launchesWhenPortIsDead() async {
+	@Test("waits to be asked before starting a server")
+	func waitsToBeAskedWhenPortIsDead() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.state == .idle)
+		#expect(runner.launched.isEmpty)
+		#expect(supervisor.canStart)
+	}
+
+	@Test("starts the configured server when asked")
+	func launchesWhenAsked() async {
 		let runner = FakeRunner()
 		let records = MemoryRecordStore()
 		let supervisor = ServerSupervisor(
@@ -155,6 +173,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(supervisor.state == .running(owned: true))
 		#expect(runner.launched == [.test])
@@ -188,6 +207,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(supervisor.state == .failed(reason: TestError.noBinary.localizedDescription))
 		#expect(supervisor.canStart)
@@ -204,6 +224,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		await supervisor.stop()
 
 		#expect(runner.started?.didTerminate == true)
@@ -224,6 +245,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		await supervisor.stop()
 
 		#expect(runner.started?.didKill == true)
@@ -241,13 +263,14 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		supervisor.stopOnQuit()
 
 		#expect(runner.started?.didTerminate == true)
 		#expect(records.record == nil)
 	}
 
-	@Test("starts nothing for inputs the user has already replaced")
+	@Test("starts the config the user ended on, not one they replaced")
 	func ignoresASupersededRequest() async {
 		let runner = FakeRunner()
 		let probe = SlowReachability()
@@ -264,6 +287,7 @@ struct ServerSupervisorTests {
 		probe.answerNow()
 		await supervisor.use(address: .standard, plan: .other)
 		await first.value
+		await supervisor.start()
 
 		#expect(runner.launched == [.other])
 	}
@@ -286,6 +310,44 @@ struct ServerSupervisorTests {
 		#expect(supervisor.canStart)
 	}
 
+	@Test("attaches to a server started elsewhere while it waits to be asked")
+	func attachesToAServerThatAppears() async {
+		let runner = FakeRunner()
+		let reachability = FakeReachability(false)
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: reachability,
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		reachability.presence = .processCompose
+		await supervisor.attachIfAnswering()
+
+		#expect(supervisor.state == .running(owned: false))
+		#expect(runner.launched.isEmpty)
+	}
+
+	@Test("says it is starting while a launch is under way")
+	func reportsALaunchUnderWay() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+		var wasLaunchingDuringCheck = false
+		runner.whileValidating = {
+			wasLaunchingDuringCheck = MainActor.assumeIsolated { supervisor.isLaunching }
+		}
+
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		#expect(wasLaunchingDuringCheck)
+		#expect(supervisor.isLaunching == false)
+	}
+
 	@Test("says what is wrong with the config instead of starting it")
 	func refusesAConfigThatWillNotLoad() async {
 		let runner = FakeRunner()
@@ -297,6 +359,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(supervisor.state == .failed(reason: "watch path 'acme/v3' does not exist"))
 		#expect(runner.launched.isEmpty)
@@ -370,8 +433,8 @@ struct ServerSupervisorTests {
 		#expect(LiveServerReachability.presence(status: nil, body: Data()) == .nothing)
 	}
 
-	@Test("keeps the running server when its request was abandoned")
-	func keepsTheServerWhenTheRequestIsCancelled() async {
+	@Test("finishes moving to another address even when whoever asked has gone")
+	func finishesAMoveItsCallerAbandoned() async {
 		let runner = FakeRunner()
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -380,14 +443,16 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		let other = ServerAddress(host: "localhost", port: 28081)!
 		let abandoned = Task { await supervisor.use(address: other, plan: .test) }
 		abandoned.cancel()
 		await abandoned.value
 
-		#expect(runner.started?.isRunning == true)
-		#expect(supervisor.state == .running(owned: true))
+		#expect(runner.started?.didTerminate == true)
+		#expect(supervisor.state == .idle)
+		#expect(supervisor.canStart)
 	}
 
 	@Test("finishes stopping even when whoever asked has walked away")
@@ -401,6 +466,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		let stopping = Task { await supervisor.stop() }
 		stopping.cancel()
@@ -423,6 +489,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		let winner = ServerRecord(group: 7777, port: 28080, owner: .test(902))
 		try? records.save(winner)
@@ -473,8 +540,8 @@ struct ServerSupervisorTests {
 		#expect(records.record == record)
 	}
 
-	@Test("starts the stack once Settings comes back to this machine")
-	func startsAfterSwitchingBackFromRemote() async {
+	@Test("offers to start once Settings comes back to this machine")
+	func offersToStartAfterSwitchingBackFromRemote() async {
 		let runner = FakeRunner()
 		let supervisor = ServerSupervisor(
 			runner: runner,
@@ -489,8 +556,9 @@ struct ServerSupervisorTests {
 
 		await supervisor.use(address: .standard, plan: .test)
 
-		#expect(supervisor.state == .running(owned: true))
-		#expect(runner.launched == [.test])
+		#expect(supervisor.state == .idle)
+		#expect(supervisor.canStart)
+		#expect(runner.launched.isEmpty)
 	}
 
 	@Test("does not treat a recycled owner pid as the app that started a server")
@@ -526,6 +594,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(runner.started?.didTerminate == true)
 		#expect(supervisor.isOwned == false)
@@ -544,6 +613,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(runner.launched.isEmpty)
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
@@ -618,6 +688,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		await supervisor.stop()
 
 		#expect(records.record != nil)
@@ -673,6 +744,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(runner.launched.isEmpty)
 		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
@@ -745,6 +817,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		// The record failed and the stack would not stop, so it is still the app's to stop.
 		supervisor.stopOnQuit()
@@ -766,6 +839,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		let first = runner.started
 
@@ -773,6 +847,7 @@ struct ServerSupervisorTests {
 		let other = ServerAddress(host: "localhost", port: 28081)!
 		await supervisor.use(address: other, plan: .test)
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(supervisor.state == .running(owned: true))
 		#expect(records.record != nil)
@@ -789,6 +864,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		let started = runner.started
 
@@ -827,13 +903,14 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		#expect(supervisor.state == .running(owned: true))
 		#expect(runner.launched == [.test])
 	}
 
-	@Test("finishes a launch even when whoever asked for it has gone")
-	func finishesALaunchItsCallerAbandoned() async {
+	@Test("settles a request even when a second window asking the same goes away")
+	func settlesARequestItsSecondCallerAbandoned() async {
 		let runner = FakeRunner()
 		let probe = SlowReachability()
 		let supervisor = ServerSupervisor(
@@ -851,6 +928,25 @@ struct ServerSupervisorTests {
 		probe.answerNow()
 		await first.value
 		await second.value
+
+		#expect(supervisor.state == .idle)
+		#expect(supervisor.canStart)
+	}
+
+	@Test("finishes a launch even when whoever asked for it has gone")
+	func finishesALaunchItsCallerAbandoned() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		let starting = Task { await supervisor.start() }
+		starting.cancel()
+		await starting.value
 
 		#expect(runner.launched == [.test])
 		#expect(supervisor.state == .running(owned: true))
@@ -877,8 +973,9 @@ struct ServerSupervisorTests {
 		await first.value
 		await second.value
 		await third.value
+		await supervisor.start()
 
-		// The third request is the one that counts, and it started exactly one server.
+		// The third request is the one that counts, and starting runs exactly one server.
 		#expect(runner.launched == [.test])
 		#expect(supervisor.state == .running(owned: true))
 	}
@@ -894,6 +991,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		// The stack is up but answering oddly for a moment, as one does while it starts.
 		reachability.presence = .occupied
@@ -913,6 +1011,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		runner.started?.exitStatus = -1
 
 		await supervisor.stop()
@@ -931,6 +1030,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 
 		let started = runner.started
 
@@ -956,6 +1056,7 @@ struct ServerSupervisorTests {
 		)
 
 		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
 		runner.started?.emit("chatbot is running")
 		await settle(until: { supervisor.log.lines.count == 1 })
 

@@ -71,8 +71,11 @@ struct StackView: View {
 			model.abandonActions()
 		}
 		.onChange(of: model.connection) { _, connection in
-			guard case .disconnected = connection else { return }
-			Task { await server.recheck() }
+			switch connection {
+			case .connected: Task { await server.attachIfAnswering() }
+			case .disconnected: Task { await server.recheck() }
+			case .connecting: break
+			}
 		}
 		.task { if !storedProject.isEmpty { model.select(project: storedProject) } }
 		.task(id: ServerInputs(address: address, plan: launchPlan)) {
@@ -254,8 +257,10 @@ struct StackView: View {
 				: "Set the server up to start this stack from here. It reconnects on its own if you run the stack yourself."
 		case .remote:
 			"The app only starts a server on this machine. Run the stack on \(host), or point Settings at localhost."
-		case .idle, .running:
-			"The app starts one when nothing answers the port, and reconnects on its own."
+		case .idle:
+			"Start the stack here, or run it yourself and the app picks it up."
+		case .running:
+			"The app connects as soon as the server answers."
 		}
 	}
 
@@ -298,20 +303,20 @@ struct StackView: View {
 
 	@ViewBuilder
 	private var powerControl: some View {
-		if model.isChangingStack {
+		if power.isWorking {
 			ProgressView()
 				.controlSize(.small)
 				.accessibilityLabel("Working on the stack")
 		} else {
-			Button(powerTitle, systemImage: "power") { model.togglePower() }
+			Button(power.title, systemImage: "power") { power.perform() }
 			.labelStyle(.titleAndIcon)
-			.disabled(!model.canChangePower)
+			.disabled(!power.isEnabled)
 			.help(model.power == .canStop ? "Stop every running process" : "Start every process the stack defines")
 		}
 	}
 
-	private var powerTitle: String {
-		model.power == .canStop ? "Stop Stack..." : "Start Stack"
+	private var power: PowerAction {
+		PowerAction(model: model, server: server)
 	}
 
 	@ViewBuilder
@@ -327,8 +332,8 @@ struct StackView: View {
 				if server.state == .unconfigured {
 					Button("Set Up Server...") { windowState.isSettingUpServer = true }
 				} else {
-					Button("Start Server") { Task { await server.start() } }
-						.disabled(!server.canStart)
+					Button(power.title) { power.perform() }
+						.disabled(!power.isEnabled)
 				}
 			}
 		} else if model.processes.isEmpty {
