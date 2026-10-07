@@ -128,6 +128,14 @@ public final class ServerSupervisor {
 		launchTask != nil
 	}
 
+	/// Whether pointing at `address` takes down the stack this app started. An address the
+	/// app cannot use leaves it running.
+	public func wouldStop(movingTo address: ServerAddress?) -> Bool {
+		guard let address else { return false }
+
+		return isOwned && address != self.address
+	}
+
 	public var canStart: Bool {
 		guard plan != nil, address?.isLoopback == true else { return false }
 

@@ -2,9 +2,11 @@ import ProcessComposeCore
 import SwiftUI
 
 struct SettingsView: View {
+	let server: ServerSupervisor
+
 	var body: some View {
 		TabView {
-			ServerSettings()
+			ServerSettings(server: server)
 				.tabItem { Label("Server", systemImage: "network") }
 			LogSettings()
 				.tabItem { Label("Logs", systemImage: "text.alignleft") }
@@ -14,6 +16,8 @@ struct SettingsView: View {
 }
 
 private struct ServerSettings: View {
+	let server: ServerSupervisor
+
 	@AppStorage(PreferenceKey.host) private var host = PreferenceDefault.host
 	@AppStorage(PreferenceKey.port) private var port = PreferenceDefault.port
 	@AppStorage(PreferenceKey.mcpPort) private var mcpPort = PreferenceDefault.mcpPort
@@ -21,6 +25,7 @@ private struct ServerSettings: View {
 	@State private var draftHost = ""
 	@State private var draftPort = 0
 	@State private var draftMCPPort = 0
+	@State private var isConfirmingMove = false
 
 	var body: some View {
 		Form {
@@ -31,7 +36,7 @@ private struct ServerSettings: View {
 
 				HStack {
 					Spacer(minLength: 0)
-					Button("Apply") { apply() }
+					Button("Apply") { requestApply() }
 						.disabled(!hasChanges)
 				}
 			} footer: {
@@ -41,7 +46,12 @@ private struct ServerSettings: View {
 			}
 		}
 		.formStyle(.grouped)
-		.onSubmit { apply() }
+		.onSubmit { requestApply() }
+		.confirmationDialog("Stop the stack to change the address?", isPresented: $isConfirmingMove) {
+			Button("Stop and Apply", role: .destructive) { apply() }
+		} message: {
+			Text("The app started this server. Moving to another address stops it and every process it is running.")
+		}
 		.task {
 			draftHost = host
 			draftPort = port
@@ -55,6 +65,16 @@ private struct ServerSettings: View {
 
 	// A half-typed port names a different server, and pointing the app at one retires the
 	// server it started for the last, so these only take effect once they are asked for.
+	private func requestApply() {
+		guard hasChanges else { return }
+
+		let target = ServerAddress(host: draftHost, port: draftPort)
+
+		guard server.wouldStop(movingTo: target) else { return apply() }
+
+		isConfirmingMove = true
+	}
+
 	private func apply() {
 		host = draftHost
 		port = draftPort

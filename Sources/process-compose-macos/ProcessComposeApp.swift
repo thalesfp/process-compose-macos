@@ -38,7 +38,7 @@ struct ProcessComposeApp: App {
 		}
 
 		Settings {
-			SettingsView()
+			SettingsView(server: server)
 		}
 	}
 }

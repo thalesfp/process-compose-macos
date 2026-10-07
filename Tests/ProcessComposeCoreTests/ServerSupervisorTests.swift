@@ -328,6 +328,48 @@ struct ServerSupervisorTests {
 		#expect(runner.launched.isEmpty)
 	}
 
+	@Test("warns that moving a server it started stops it")
+	func warnsThatMovingItsServerStopsIt() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		#expect(supervisor.wouldStop(movingTo: ServerAddress(host: "localhost", port: 28099)))
+		#expect(supervisor.wouldStop(movingTo: .standard) == false)
+	}
+
+	@Test("moving to an address it cannot use stops nothing")
+	func anUnusableAddressStopsNothing() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+
+		#expect(supervisor.wouldStop(movingTo: nil) == false)
+	}
+
+	@Test("moving away from a server it only attached to stops nothing")
+	func movingAwayFromAForeignServerStopsNothing() async {
+		let supervisor = ServerSupervisor(
+			runner: FakeRunner(),
+			reachability: FakeReachability(true),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		#expect(supervisor.wouldStop(movingTo: ServerAddress(host: "localhost", port: 28099)) == false)
+	}
+
 	@Test("says it is starting while a launch is under way")
 	func reportsALaunchUnderWay() async {
 		let runner = FakeRunner()
