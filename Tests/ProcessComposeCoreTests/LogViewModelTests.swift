@@ -80,6 +80,23 @@ struct LogViewModelTests {
 		#expect(viewModel.lastError == "No process-compose server on port 28080")
 	}
 
+	@Test("drops the failure once the stream delivers again")
+	func clearsTheFailureOnceLinesArrive() async {
+		let client = StubClient()
+		client.logStreamFailure = ProcessComposeError.unreachable(port: 28080)
+		let viewModel = LogViewModel(client: client)
+		viewModel.select("chatbot")
+		await viewModel.stream()
+		client.logStreamFailure = nil
+
+		let session = Task { await viewModel.stream() }
+		client.emitLog(.init(message: "listening", processName: "chatbot"))
+		client.finishLogStream()
+		await session.value
+
+		#expect(viewModel.lastError == nil)
+	}
+
 	@Test("colors survive into the buffered line")
 	func keepsAnsiColor() async {
 		let client = StubClient()

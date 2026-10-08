@@ -96,6 +96,7 @@ public final class LogViewModel {
 		do {
 			for try await message in client.logMessages(for: name, backfill: backfill) {
 				guard message.processName == name || message.processName.isEmpty else { continue }
+				if lastError != nil { lastError = nil }
 				append(message)
 			}
 		} catch is CancellationError {
