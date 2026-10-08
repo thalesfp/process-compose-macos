@@ -28,35 +28,29 @@ struct StackView: View {
 	@AppStorage(PreferenceKey.asksBeforeClearingLog) private var asksBeforeClearingLog = true
 
 	var body: some View {
-		NavigationSplitView(columnVisibility: columnVisibility) {
-			sidebar
-		} detail: {
-			VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
-				content
-			} bottom: {
-				if windowState.isShowingServerLog {
-					ServerLogPane(
-						log: server.log,
-						status: serverStatus,
-						windowState: windowState
-					) { windowState.isShowingServerLog = false }
-				} else {
-					LogPane(model: logModel, windowState: windowState, clear: clearLog)
-				}
+		syncedWithModel
+			.task { if !storedProject.isEmpty { model.select(project: storedProject) } }
+			.task(id: ServerInputs(address: address, plan: launchPlan)) {
+				await server.use(address: address, plan: launchPlan)
 			}
-			.overlay(alignment: .bottom) { errorBar }
-			.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
-			// dialogSuppressionToggle reaches every dialog presented within the view it modifies.
+			.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
 			.confirmationDialog(
 				model.confirmation.map { model.question(for: $0.target) } ?? "",
-				isPresented: isConfirming(clearingLog: true),
+				isPresented: isConfirming(clearingLog: false),
 				presenting: model.confirmation
 			) { confirmation in
 				answerButton(for: confirmation)
 			} message: { confirmation in
 				detail(for: confirmation)
 			}
-			.dialogSuppressionToggle(isSuppressed: isClearLogQuestionSuppressed)
+	}
+
+	// Swift 6.3 gives up type-checking one modifier chain this long, so it is built in stages.
+	private var window: some View {
+		NavigationSplitView(columnVisibility: columnVisibility) {
+			sidebar
+		} detail: {
+			detailColumn
 		}
 		.overlay { if quit.isStopping { stoppingOverlay } }
 		.background(StackWindowHook(quit: quit))
@@ -64,48 +58,71 @@ struct StackView: View {
 		.navigationTitle(model.project?.projectName ?? "Process Compose")
 		.navigationSubtitle(subtitle)
 		.toolbar { toolbar }
-		.onChange(of: bufferLines, initial: true) { _, lines in
-			logModel.maxLines = lines
-			server.log.maxLines = lines
-		}
-		.onChange(of: backfill, initial: true) { _, lines in logModel.backfill = lines }
-		.onChange(of: address, initial: true) { _, _ in reconnect() }
-		.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
-		.onChange(of: model.selection) { _, name in
-			logModel.select(name)
-			if name != nil { windowState.isShowingServerLog = false }
-		}
-		.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
-		.onChange(of: model.project?.configFiles ?? []) { _, files in
-			ServerLaunchPlan.learnedConfiguration(from: files, current: configPath)
-				.map { suggestedConfig = $0 }
-		}
-		.onChange(of: server.identity) {
-			// Whatever was agreed to was agreed for the server that was there when the
-			// question was asked, and a restart at the same address is another server.
-			model.abandonActions()
-		}
-		.onChange(of: model.connection) { _, connection in
-			switch connection {
-			case .connected: Task { await server.attachIfAnswering() }
-			case .disconnected: Task { await server.recheck() }
-			case .connecting: break
+	}
+
+	private var syncedWithPreferences: some View {
+		window
+			.onChange(of: bufferLines, initial: true) { _, lines in
+				logModel.maxLines = lines
+				server.log.maxLines = lines
+			}
+			.onChange(of: backfill, initial: true) { _, lines in logModel.backfill = lines }
+			.onChange(of: address, initial: true) { _, _ in reconnect() }
+			.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
+	}
+
+	private var syncedWithModel: some View {
+		syncedWithPreferences
+			.onChange(of: model.selection) { _, name in
+				logModel.select(name)
+				if name != nil { windowState.isShowingServerLog = false }
+			}
+			.onChange(of: model.selectedProject) { _, name in storedProject = name ?? "" }
+			.onChange(of: model.project?.configFiles ?? []) { _, files in
+				ServerLaunchPlan.learnedConfiguration(from: files, current: configPath)
+					.map { suggestedConfig = $0 }
+			}
+			.onChange(of: server.identity) {
+				// Whatever was agreed to was agreed for the server that was there when the
+				// question was asked, and a restart at the same address is another server.
+				model.abandonActions()
+			}
+			.onChange(of: model.connection) { _, connection in
+				switch connection {
+				case .connected: Task { await server.attachIfAnswering() }
+				case .disconnected: Task { await server.recheck() }
+				case .connecting: break
+				}
+			}
+	}
+
+	private var detailColumn: some View {
+		VerticalSplit(minTopHeight: 180, minBottomHeight: 140) {
+			content
+		} bottom: {
+			if windowState.isShowingServerLog {
+				ServerLogPane(
+					log: server.log,
+					status: serverStatus,
+					windowState: windowState
+				) { windowState.isShowingServerLog = false }
+			} else {
+				LogPane(model: logModel, windowState: windowState, clear: clearLog)
 			}
 		}
-		.task { if !storedProject.isEmpty { model.select(project: storedProject) } }
-		.task(id: ServerInputs(address: address, plan: launchPlan)) {
-			await server.use(address: address, plan: launchPlan)
-		}
-		.sheet(isPresented: $windowState.isSettingUpServer) { ServerSetupSheet() }
+		.overlay(alignment: .bottom) { errorBar }
+		.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.lastError)
+		// dialogSuppressionToggle reaches every dialog presented within the view it modifies.
 		.confirmationDialog(
 			model.confirmation.map { model.question(for: $0.target) } ?? "",
-			isPresented: isConfirming(clearingLog: false),
+			isPresented: isConfirming(clearingLog: true),
 			presenting: model.confirmation
 		) { confirmation in
 			answerButton(for: confirmation)
 		} message: { confirmation in
 			detail(for: confirmation)
 		}
+		.dialogSuppressionToggle(isSuppressed: isClearLogQuestionSuppressed)
 	}
 
 	/// The dialog is raised by whatever names a target, and dismissing it clears the
