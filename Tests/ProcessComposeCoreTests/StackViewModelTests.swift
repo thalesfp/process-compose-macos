@@ -1561,7 +1561,7 @@ struct StackViewModelTests {
 		await settle(viewModel)
 
 		let group = Task { await viewModel.stopStack() }
-		await settle(until: { viewModel.isChangingStack })
+		await settle(until: { client.stopped == ["worker"] })
 
 		// A process the group has not reached yet, so the refusal is the group action's
 		// doing rather than that one process already being busy.
