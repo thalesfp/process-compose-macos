@@ -14,7 +14,7 @@ fi
 VERSION="${PROCESS_COMPOSE_MACOS_VERSION:-0.2.0}"
 APP="build/$APP_NAME"
 
-BUILD=(swift build -c release --arch arm64 --arch x86_64)
+BUILD=(swift build -c release --arch arm64)
 "${BUILD[@]}"
 BIN_DIR="$("${BUILD[@]}" --show-bin-path)"
 
