@@ -101,6 +101,8 @@ public enum ProcessStatus: Sendable, Hashable {
 	case disabled
 	case watching
 	case error
+	/// process-compose has no status for a process while no server runs it, so this one is the app's.
+	case stopped
 	case other(String)
 
 	public init(rawValue: String) {
@@ -129,6 +131,7 @@ public enum ProcessStatus: Sendable, Hashable {
 		case .disabled: "Disabled"
 		case .watching: "Watching"
 		case .error: "Error"
+		case .stopped: "Stopped"
 		case .other(let raw): raw
 		}
 	}
@@ -154,7 +157,7 @@ extension ProcessState {
 			.watching
 		case .completed:
 			exitedWithError ? .failed : .idle
-		case .disabled, .skipped:
+		case .disabled, .skipped, .stopped:
 			.idle
 		case .error:
 			.failed
@@ -180,7 +183,7 @@ extension ProcessState {
 	public var canStart: Bool {
 		switch status {
 		case .running, .pending, .restarting, .terminating, .watching: false
-		case .completed, .skipped, .disabled, .error, .other: !isRunning
+		case .completed, .skipped, .disabled, .error, .stopped, .other: !isRunning
 		}
 	}
 	public var canStop: Bool { isRunning }

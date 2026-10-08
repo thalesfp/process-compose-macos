@@ -28,9 +28,6 @@ public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 		let restart: Int?
 	}
 
-	/// Only the names are read; what each dependency waits for does not change who starts.
-	private struct Condition: Decodable {}
-
 	public init(from decoder: any Decoder) throws {
 		let c = try decoder.container(keyedBy: CodingKeys.self)
 		workingDir = try c.decodeIfPresent(String.self, forKey: .workingDir)
@@ -39,10 +36,14 @@ public struct ProcessConfiguration: Decodable, Sendable, Hashable {
 		// for the default, so any value at all means the process is kept alive.
 		let policy = try c.decodeIfPresent(RestartPolicy.self, forKey: .restartPolicy)
 		restartsAutomatically = (policy?.restart ?? 0) != 0
-		dependsOn = try c.decodeIfPresent([String: Condition].self, forKey: .dependsOn)
+		// Only the names are read; what each dependency waits for does not change who starts.
+		dependsOn = try c.decodeIfPresent([String: Unread].self, forKey: .dependsOn)
 			.map { $0.keys.sorted() } ?? []
 	}
 }
+
+/// A config value whose content the app does not read.
+struct Unread: Decodable {}
 
 /// What a process is for. process-compose has no such field: a service is one that
 /// stays up, a task is one that runs to completion, and only its behaviour says which.

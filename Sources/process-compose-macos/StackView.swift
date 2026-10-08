@@ -69,6 +69,10 @@ struct StackView: View {
 			.onChange(of: backfill, initial: true) { _, lines in logModel.backfill = lines }
 			.onChange(of: address, initial: true) { _, _ in reconnect() }
 			.onChange(of: mcpAddress, initial: true) { _, mcp in mcpModel.watch(mcp) }
+			.onChange(of: launchPlan, initial: true) { _, plan in model.define(from: plan) }
+			.onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+				model.refreshDefinition()
+			}
 	}
 
 	private var syncedWithModel: some View {
@@ -107,7 +111,12 @@ struct StackView: View {
 					windowState: windowState
 				) { windowState.isShowingServerLog = false }
 			} else {
-				LogPane(model: logModel, windowState: windowState, clear: clearLog)
+				LogPane(
+					model: logModel,
+					windowState: windowState,
+					clear: clearLog,
+					isConnected: isConnected
+				)
 			}
 		}
 		.overlay(alignment: .bottom) { errorBar }
@@ -416,37 +425,72 @@ struct StackView: View {
 
 	@ViewBuilder
 	private var content: some View {
-		if case .disconnected(let reason) = model.connection {
+		if model.isShowingDefinition {
+			processList
+				.safeAreaInset(edge: .top, spacing: 0) { stoppedBanner }
+		} else if case .disconnected(let reason) = model.connection {
 			ContentUnavailableView {
 				Label("No stack running", systemImage: "bolt.horizontal.circle")
 			} description: {
 				Text(reason)
 				Text(serverAdvice)
 					.font(.callout)
-			} actions: {
-				if server.state == .unconfigured {
-					Button("Set Up Server…") { windowState.isSettingUpServer = true }
-				} else {
-					Button(power.title) { power.perform() }
-						.disabled(!power.isEnabled)
+				if let problem = model.definitionProblem {
+					Text(problem)
+						.font(.callout)
 				}
+			} actions: {
+				offlineAction
 			}
 		} else if model.processes.isEmpty {
 			ProgressView("Connecting")
 				.frame(maxWidth: .infinity, maxHeight: .infinity)
 		} else {
-			List(selection: $model.selection) {
-				ForEach(model.sections) { section in
-					Section {
-						ForEach(section.processes) { state in
-							row(for: state, kind: section.kind)
-						}
-					} header: {
-						sectionHeader(for: section)
+			processList
+		}
+	}
+
+	private var processList: some View {
+		List(selection: $model.selection) {
+			ForEach(model.sections) { section in
+				Section {
+					ForEach(section.processes) { state in
+						row(for: state, kind: section.kind)
 					}
+				} header: {
+					sectionHeader(for: section)
 				}
 			}
-			.listStyle(.inset)
+		}
+		.listStyle(.inset)
+	}
+
+	private var stoppedBanner: some View {
+		HStack(spacing: 12) {
+			VStack(alignment: .leading, spacing: 2) {
+				Text("The stack is not running")
+					.font(.headline)
+				Text(serverAdvice)
+					.font(.callout)
+					.foregroundStyle(.secondary)
+					.fixedSize(horizontal: false, vertical: true)
+			}
+
+			Spacer(minLength: 12)
+
+			offlineAction
+		}
+		.noticeStyle()
+		.accessibilityElement(children: .contain)
+	}
+
+	@ViewBuilder
+	private var offlineAction: some View {
+		if server.state == .unconfigured {
+			Button("Set Up Server…") { windowState.isSettingUpServer = true }
+		} else {
+			Button(power.title) { power.perform() }
+				.disabled(!power.isEnabled)
 		}
 	}
 
@@ -519,11 +563,7 @@ struct StackView: View {
 				Spacer(minLength: 12)
 				Button("Dismiss") { model.dismissError() }
 			}
-			.padding(.horizontal, 12)
-			.padding(.vertical, 8)
-			.background(errorBackground, in: RoundedRectangle(cornerRadius: 8))
-			.overlay(RoundedRectangle(cornerRadius: 8).stroke(.separator))
-			.padding(12)
+			.noticeStyle()
 			.transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
 		}
 	}
@@ -551,19 +591,12 @@ struct StackView: View {
 		}
 		.padding(28)
 		.frame(maxWidth: 440)
-		.background(errorBackground, in: RoundedRectangle(cornerRadius: 12))
-		.overlay(RoundedRectangle(cornerRadius: 12).stroke(.separator))
+		.modifier(Panel(cornerRadius: 12))
 		.frame(maxWidth: .infinity, maxHeight: .infinity)
 		.background(Color(nsColor: .windowBackgroundColor).opacity(reduceTransparency ? 1 : 0.6))
 		.contentShape(Rectangle())
 		.accessibilityElement(children: .combine)
 		.accessibilityAddTraits(.isModal)
-	}
-
-	private var errorBackground: AnyShapeStyle {
-		reduceTransparency
-			? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
-			: AnyShapeStyle(.regularMaterial)
 	}
 
 	private func uptimeReadout(_ uptime: Duration) -> some View {
@@ -634,6 +667,34 @@ struct StackView: View {
 		let client = LiveProcessComposeClient(address: address)
 		model.use(client, at: address)
 		logModel.use(client)
+	}
+}
+
+/// What the window floats over its content. Material turns opaque when transparency is reduced.
+private struct Panel: ViewModifier {
+	var cornerRadius: CGFloat = 8
+
+	@Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+
+	func body(content: Content) -> some View {
+		content
+			.background(background, in: RoundedRectangle(cornerRadius: cornerRadius))
+			.overlay(RoundedRectangle(cornerRadius: cornerRadius).stroke(.separator))
+	}
+
+	private var background: AnyShapeStyle {
+		reduceTransparency
+			? AnyShapeStyle(Color(nsColor: .windowBackgroundColor))
+			: AnyShapeStyle(.regularMaterial)
+	}
+}
+
+private extension View {
+	func noticeStyle() -> some View {
+		padding(.horizontal, 12)
+			.padding(.vertical, 8)
+			.modifier(Panel())
+			.padding(12)
 	}
 }
 

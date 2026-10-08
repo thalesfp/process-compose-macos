@@ -146,13 +146,16 @@ struct StackViewModelTests {
 		let client = StubClient(processes: [.init(name: "relay", status: .disabled)])
 		client.actionFailure = ProcessComposeError.server(message: "no such process: relay")
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.startProcess("relay")
 
 		#expect(viewModel.lastError == "relay: no such process: relay")
 		#expect(!viewModel.isBusy("relay"))
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("clears the previous error once an action succeeds")
@@ -160,14 +163,17 @@ struct StackViewModelTests {
 		let client = StubClient(processes: [.init(name: "relay", status: .disabled)])
 		client.actionFailure = ProcessComposeError.server(message: "boom")
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		await viewModel.startProcess("relay")
 		client.actionFailure = nil
 		await viewModel.startProcess("relay")
 
 		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("selects no process on connect, so nothing streams until it is asked for")
@@ -357,13 +363,16 @@ struct StackViewModelTests {
 			.init(name: "worker", namespace: "api", status: .completed),
 		])
 		let viewModel = StackViewModel(client: client)
-		client.finishStream()
-		await viewModel.observe()
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
 
 		#expect(viewModel.canStop("api"))
 		#expect(!viewModel.canStart("api"))
 		#expect(viewModel.canStart("worker"))
 		#expect(!viewModel.canStop("worker"))
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("says how far a stop reaches when other projects are running too")
@@ -1736,6 +1745,184 @@ struct StackViewModelTests {
 		await viewModel.observe()
 
 		#expect(viewModel.power == .unavailable)
+	}
+
+	@Test("lists the config's projects, every process stopped, while no server answers")
+	func listsTheDefinitionWhileOffline() async {
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
+		viewModel.define(from: localPlan)
+
+		await viewModel.observe()
+
+		#expect(viewModel.isShowingDefinition)
+		#expect(viewModel.projects.map(\.name) == ["acme", "chatbot"])
+		#expect(viewModel.processes.map(\.status) == [.stopped, .disabled, .stopped])
+		#expect(viewModel.runningCount == 0)
+	}
+
+	@Test("shows the config once the server it was following goes away")
+	func showsTheDefinitionAfterTheServerGoes() async {
+		let client = StubClient(processes: [
+			.init(name: "web", namespace: "acme", status: .running, isRunning: true),
+		])
+		let viewModel = StackViewModel(client: client, readDefinition: { _ in acmeDefinition })
+		viewModel.define(from: localPlan)
+
+		client.finishStream()
+		await viewModel.observe()
+
+		#expect(viewModel.isShowingDefinition)
+		#expect(viewModel.processes.first { $0.name == "web" }?.status == .stopped)
+	}
+
+	@Test("follows the server once it answers, in place of the config")
+	func replacesTheDefinitionWithTheServer() async {
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
+		viewModel.define(from: localPlan)
+		await viewModel.observe()
+		let client = StubClient(processes: [
+			.init(name: "web", namespace: "acme", status: .running, isRunning: true),
+		])
+		client.workingDirs["web"] = "acme/web"
+		viewModel.use(client)
+
+		await settle(viewModel)
+
+		#expect(!viewModel.isShowingDefinition)
+		#expect(viewModel.processes.map(\.name) == ["web"])
+		#expect(viewModel.processes.first?.status == .running)
+	}
+
+	@Test("follows the server that answers even when the config is read again while it loads")
+	func keepsTheServerOverAConfigReadMidLoad() async {
+		let client = StubClient(processes: [
+			.init(name: "web", namespace: "acme", status: .running, isRunning: true),
+		])
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
+		viewModel.define(from: localPlan)
+		await viewModel.observe()
+		client.beforeProjectState = { await viewModel.refreshDefinition() }
+		viewModel.use(client)
+
+		await settle(viewModel)
+
+		#expect(!viewModel.isShowingDefinition)
+		#expect(viewModel.processes.first?.status == .running)
+	}
+
+	@Test("keeps the project chosen before launch when the config defines it")
+	func keepsTheRestoredProjectOffline() async {
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
+		viewModel.select(project: "chatbot")
+		viewModel.define(from: localPlan)
+
+		await viewModel.observe()
+
+		#expect(viewModel.selectedProject == "chatbot")
+		#expect(viewModel.visibleProcesses.map(\.name) == ["bot"])
+	}
+
+	@Test("lists the new config once Settings points the app at another stack")
+	func showsTheNewDefinitionAfterMoving() async {
+		let relay = [DefinedProcess(name: "relay", configuration: .init(workingDir: "relay"))]
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { plan in
+			plan.port == 28181 ? relay : acmeDefinition
+		})
+		viewModel.define(from: localPlan)
+		await viewModel.observe()
+
+		viewModel.use(unreachable())
+		viewModel.define(from: ServerLaunchPlan(executablePath: "/bin/pc", configurationPath: "/relay.yaml", port: 28181))
+		await settle(until: { viewModel.isShowingDefinition })
+
+		#expect(viewModel.processes.map(\.name) == ["relay"])
+		#expect(viewModel.projects.map(\.name) == ["relay"])
+	}
+
+	@Test("lists nothing for a server on another machine, whose config the app does not start")
+	func listsNothingForARemoteServer() async {
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
+		viewModel.define(
+			from: ServerLaunchPlan(
+				executablePath: "/bin/pc",
+				configurationPath: "/stack/process-compose.yaml",
+				host: "build.example",
+				port: 28080
+			)
+		)
+
+		await viewModel.observe()
+
+		#expect(!viewModel.isShowingDefinition)
+		#expect(viewModel.processes.isEmpty)
+	}
+
+	@Test("offers no start or stop on a process the config describes")
+	func offersNoRowActionsOffline() async {
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
+		viewModel.define(from: localPlan)
+
+		await viewModel.observe()
+
+		#expect(!viewModel.canStart("web"))
+		#expect(!viewModel.canStop("web"))
+	}
+
+	@Test("says why the config could not be read, and stops listing it")
+	func reportsAConfigItCanNoLongerRead() async {
+		var isBroken = false
+		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in
+			guard !isBroken else { throw StackDefinitionError.unclosedExpansion }
+			return acmeDefinition
+		})
+		viewModel.define(from: localPlan)
+		await viewModel.observe()
+		isBroken = true
+
+		viewModel.refreshDefinition()
+
+		#expect(viewModel.definitionProblem == "Could not read process-compose.yaml: a ${ is never closed")
+		#expect(!viewModel.isShowingDefinition)
+		#expect(viewModel.processes.isEmpty)
+	}
+
+	@Test("shows a config read while the server is still answering only once it goes")
+	func holdsTheDefinitionWhileConnected() async {
+		let client = StubClient(processes: [
+			.init(name: "web", namespace: "acme", status: .running, isRunning: true),
+		])
+		let viewModel = StackViewModel(client: client, readDefinition: { _ in acmeDefinition })
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		viewModel.define(from: localPlan)
+
+		#expect(!viewModel.isShowingDefinition)
+		#expect(viewModel.processes.first?.status == .running)
+
+		client.finishStream()
+		await session.value
+	}
+
+	private func unreachable() -> StubClient {
+		StubClient(loadFailure: ProcessComposeError.unreachable(port: 28080))
+	}
+
+	private var localPlan: ServerLaunchPlan {
+		ServerLaunchPlan(executablePath: "/bin/pc", configurationPath: "/stack/process-compose.yaml", port: 28080)!
+	}
+
+	private var acmeDefinition: [DefinedProcess] {
+		[
+			DefinedProcess(name: "web", namespace: "acme", configuration: .init(workingDir: "acme/web")),
+			DefinedProcess(
+				name: "worker",
+				namespace: "acme",
+				isDisabled: true,
+				configuration: .init(workingDir: "acme/worker")
+			),
+			DefinedProcess(name: "bot", namespace: "chatbot", configuration: .init(workingDir: "chatbot/bot")),
+		]
 	}
 }
 

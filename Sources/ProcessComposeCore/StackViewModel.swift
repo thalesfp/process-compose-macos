@@ -35,6 +35,12 @@ public final class StackViewModel {
 	/// Set while the app stops its server to quit, so nothing new is sent to it meanwhile.
 	public var isQuitting = false
 
+	/// Whether the rows are the config's processes, shown stopped because no server reports on them.
+	public private(set) var isShowingDefinition = false
+
+	/// Why the config's processes could not be listed.
+	public private(set) var definitionProblem: String?
+
 	/// Whether every process's project is known. The server answers for each process
 	/// separately, and one refusal leaves that process out of the grouping, where a
 	/// project action would pass over it without saying so.
@@ -176,6 +182,8 @@ public final class StackViewModel {
 	private var busy: Set<String> = []
 	private var statesByName: [String: ProcessState] = [:]
 	private var configurations: [String: ProcessConfiguration] = [:]
+	private var definitionPlan: ServerLaunchPlan?
+	private let readDefinition: (ServerLaunchPlan) throws -> [DefinedProcess]
 
 	private var projectsByProcess: [String: String] = [:]
 	private var client: any ProcessComposeClient
@@ -189,11 +197,15 @@ public final class StackViewModel {
 	public init(
 		client: any ProcessComposeClient,
 		retryDelay: Duration = .seconds(2),
-		now: @escaping () -> Date = Date.init
+		now: @escaping () -> Date = Date.init,
+		readDefinition: @escaping (ServerLaunchPlan) throws -> [DefinedProcess] = {
+			try StackDefinition.processes(for: $0, environment: ProcessInfo.processInfo.environment)
+		}
 	) {
 		self.client = client
 		self.retryDelay = retryDelay
 		self.now = now
+		self.readDefinition = readDefinition
 	}
 
 	private func connect() {
@@ -219,6 +231,7 @@ public final class StackViewModel {
 		clockTask?.cancel()
 		clockTask = nil
 		statesByName = [:]
+		isShowingDefinition = false
 		project = nil
 		uptime = nil
 		selection = nil
@@ -226,6 +239,7 @@ public final class StackViewModel {
 		// one before it, has to reconnect rather than be taken for where we already are.
 		connectedAddress = nil
 		connection = .disconnected(reason: reason)
+		refreshDefinition()
 	}
 
 	/// Points the view model at a different server and starts over. Being handed a client
@@ -240,9 +254,33 @@ public final class StackViewModel {
 		abandonActions()
 		connection = .connecting
 		statesByName = [:]
+		isShowingDefinition = false
 		project = nil
 		lastError = nil
 		connect()
+	}
+
+	/// The config the app would start. The app only starts a server on this machine, so a
+	/// plan for anywhere else defines nothing it can list.
+	public func define(from plan: ServerLaunchPlan?) {
+		definitionPlan = plan?.address.isLoopback == true ? plan : nil
+		refreshDefinition()
+	}
+
+	/// Reads the config again while no server is up, since it can change on disk meanwhile.
+	public func refreshDefinition() {
+		guard case .disconnected = connection else { return }
+
+		definitionProblem = nil
+
+		guard let definitionPlan else { return showDefinition(nil) }
+
+		do {
+			showDefinition(try readDefinition(definitionPlan))
+		} catch {
+			definitionProblem = "Could not read \(definitionPlan.configuration.lastPathComponent): \(error.localizedDescription)"
+			showDefinition(nil)
+		}
 	}
 
 	/// Drops what was agreed to and what is already under way. A question was asked about
@@ -263,12 +301,12 @@ public final class StackViewModel {
 	}
 
 	public func canStart(_ name: String?) -> Bool {
-		guard let name, let state = statesByName[name] else { return false }
+		guard let name, let state = statesByName[name], connection == .connected else { return false }
 		return state.canStart && !busy.contains(name) && !isChangingStack && !isQuitting
 	}
 
 	public func canStop(_ name: String?) -> Bool {
-		guard let name, let state = statesByName[name] else { return false }
+		guard let name, let state = statesByName[name], connection == .connected else { return false }
 		return state.canStop && !busy.contains(name) && !isChangingStack && !isQuitting
 	}
 
@@ -655,6 +693,8 @@ public final class StackViewModel {
 			let snapshot = try await client.processes()
 			guard isCurrent(mine) else { return }
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
+			isShowingDefinition = false
+			connection = .connecting
 
 			async let state = try? await client.projectState()
 			async let loaded = ConfigurationReader.configurations(for: snapshot.map(\.name), from: client)
@@ -705,10 +745,38 @@ public final class StackViewModel {
 	/// The project belongs to the server that reported it, so its name, version and uptime
 	/// go with the connection rather than ageing on screen.
 	private func disconnect(reason: String) {
+		let wasDisconnected = if case .disconnected = connection { true } else { false }
+
 		project = nil
 		projectReadAt = nil
 		uptime = nil
 		connection = .disconnected(reason: reason)
+
+		guard !wasDisconnected else { return }
+
+		refreshDefinition()
+	}
+
+	private func showDefinition(_ definition: [DefinedProcess]?) {
+		guard let definition, !definition.isEmpty else {
+			if isShowingDefinition { forgetProcesses() }
+			return
+		}
+
+		statesByName = Dictionary(definition.map { ($0.name, $0.stoppedState) }) { _, last in last }
+		configurations = [:]
+		projectsByProcess = [:]
+		isShowingDefinition = true
+		place(Dictionary(definition.map { ($0.name, $0.configuration) }) { _, last in last })
+	}
+
+	private func forgetProcesses() {
+		statesByName = [:]
+		configurations = [:]
+		projectsByProcess = [:]
+		isShowingDefinition = false
+		recomputeGrouping()
+		reconcileSelection()
 	}
 
 	/// Every await in `observe` is a point where the connection can be cancelled or

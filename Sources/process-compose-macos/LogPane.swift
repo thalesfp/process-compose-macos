@@ -5,6 +5,7 @@ struct LogPane: View {
 	@Bindable var model: LogViewModel
 	let windowState: WindowState
 	let clear: ClearLogAction
+	let isConnected: Bool
 
 	@AppStorage(PreferenceKey.logFontSize) private var fontSize = LogFont.standard
 
@@ -44,7 +45,7 @@ struct LogPane: View {
 
 			Spacer(minLength: 12)
 
-			if let error = model.lastError {
+			if let error = shownError {
 				Text(error)
 					.font(.callout)
 					.foregroundStyle(.orange)
@@ -68,10 +69,19 @@ struct LogPane: View {
 		.padding(.vertical, 7)
 	}
 
+	/// The window already says no server is up, so failing to reach one is not news here.
+	private var shownError: String? {
+		isConnected ? model.lastError : nil
+	}
+
 	@ViewBuilder
 	private func output(_ visible: [LogLine]) -> some View {
+		let hasNoOutput = !isConnected && model.lines.isEmpty
+
 		if model.selected == nil {
 			LogPlaceholder("Select a process to read its output")
+		} else if hasNoOutput {
+			LogPlaceholder("No output while the stack is not running")
 		} else {
 			FilteredLog(lines: visible, filter: model.filter, fontSize: fontSize, isFollowing: model.isFollowing)
 		}
@@ -85,8 +95,9 @@ struct ClearLogAction {
 	let logModel: LogViewModel
 	let asks: Bool
 
+	/// Clearing truncates the server's copy, so it needs a server.
 	var isEnabled: Bool {
-		logModel.selected != nil
+		logModel.selected != nil && model.connection == .connected
 	}
 
 	func title(_ base: String) -> String {
