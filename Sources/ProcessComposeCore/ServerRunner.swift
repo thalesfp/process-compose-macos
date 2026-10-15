@@ -145,7 +145,7 @@ public struct LiveServerRunner: ServerRunner {
 		try? await Task.sleep(for: .seconds(1))
 
 		check.signal(SIGKILL)
-		check.reap()
+		_ = await onItsOwnThread { check.reap() }
 	}
 
 	public func isRunning(_ owner: ServerOwner) -> Bool {

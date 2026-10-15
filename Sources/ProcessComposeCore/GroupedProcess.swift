@@ -10,6 +10,7 @@ final class GroupedProcess: @unchecked Sendable {
 	private let output: Int32
 	private let lock = NSLock()
 	private var reaped = false
+	private var reaping = false
 	private var finished = false
 	/// Each managed group with the identities of the members it was seen holding. A group id
 	/// is reused once its group is gone, so a member has to still be the one that was noted.
@@ -239,14 +240,24 @@ final class GroupedProcess: @unchecked Sendable {
 	@discardableResult
 	func reap() -> Int32 {
 		lock.lock()
-		defer { lock.unlock() }
+		let isClaimable = isOurs && !reaped && !reaping
 
 		// waitpid answers only for a child of this process, and an adopted group is not one.
-		guard isOurs, !reaped else { return -1 }
+		guard isClaimable else {
+			lock.unlock()
+			return -1
+		}
+
+		reaping = true
+		lock.unlock()
 
 		var raw: Int32 = 0
 		waitpid(pid, &raw, 0)
+
+		lock.lock()
 		reaped = true
+		reaping = false
+		lock.unlock()
 
 		return raw & 0x7F == 0 ? (raw >> 8) & 0xFF : -1
 	}
