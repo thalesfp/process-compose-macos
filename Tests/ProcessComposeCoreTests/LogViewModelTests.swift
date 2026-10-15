@@ -174,6 +174,16 @@ struct LogBufferBoundsTests {
 		#expect(buffer.lines.first!.text.utf8.count <= LogBuffer.longestLine)
 	}
 
+	@Test("keeps a line exactly at the limit whole")
+	func keepsALineAtTheLimit() {
+		var buffer = LogBuffer(maxLines: 10)
+		let line = String(repeating: "é", count: LogBuffer.longestLine / 2)
+
+		buffer.append(line)
+
+		#expect(buffer.lines.first!.text == line)
+	}
+
 	@Test("measures a line in bytes, so combining marks cannot slip past the limit")
 	func capsByBytesNotCharacters() {
 		var buffer = LogBuffer(maxLines: 10)

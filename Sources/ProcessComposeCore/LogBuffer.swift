@@ -26,7 +26,8 @@ public struct LogBuffer: Sendable {
 	}
 
 	public mutating func append(_ text: String) {
-		let kept = String(decoding: LogBuffer.head(of: Array(text.utf8)), as: UTF8.self)
+		let isWithinLimit = text.utf8.count <= LogBuffer.longestLine
+		let kept = isWithinLimit ? text : String(decoding: LogBuffer.head(of: Array(text.utf8)), as: UTF8.self)
 
 		lines.append(LogLine(id: nextID, spans: AnsiParser.spans(in: kept)))
 		nextID += 1
