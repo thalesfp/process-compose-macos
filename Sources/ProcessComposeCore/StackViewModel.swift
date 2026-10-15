@@ -225,6 +225,7 @@ public final class StackViewModel {
 	/// and the window says why.
 	public func refuseAddress(_ reason: String) {
 		generation += 1
+		adopting = []
 		streamTask?.cancel()
 		streamTask = nil
 		clockTask?.cancel()
@@ -249,6 +250,7 @@ public final class StackViewModel {
 
 		connectedAddress = address
 		generation += 1
+		adopting = []
 		self.client = client
 		abandonActions()
 		connection = .connecting
@@ -713,22 +715,26 @@ public final class StackViewModel {
 			reconcileSelection()
 			connection = .connected
 
-			for try await event in client.stateEvents() {
-				guard isCurrent(mine) else { return }
+			try await withThrowingDiscardingTaskGroup { group in
+				defer { group.cancelAll() }
 
-				let name = event.state.name
-				statesByName[name] = event.state
+				for try await event in client.stateEvents() {
+					guard isCurrent(mine) else { return }
 
-				// Keyed on the missing configuration rather than on the process being new, so
-				// a read that failed is tried again the next time the process is heard from.
-				guard configurations[name] == nil, !adopting.contains(name) else { continue }
+					let name = event.state.name
+					statesByName[name] = event.state
 
-				adopting.insert(name)
-				recomputeGrouping()
+					// Keyed on the missing configuration rather than on the process being new, so
+					// a read that failed is tried again the next time the process is heard from.
+					guard configurations[name] == nil, !adopting.contains(name) else { continue }
 
-				// The read is left to run on its own: a configuration request that hangs must
-				// not hold up the state changes queued behind it on the stream.
-				Task { [weak self] in await self?.adopt(name, observation: mine) }
+					adopting.insert(name)
+					recomputeGrouping()
+
+					// The read runs beside the stream: a configuration request that hangs must
+					// not hold up the state changes queued behind it, and it ends with the stream.
+					group.addTask { await self.adopt(name, observation: mine) }
+				}
 			}
 
 			guard isCurrent(mine) else { return }

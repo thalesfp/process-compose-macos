@@ -642,6 +642,44 @@ struct StackViewModelTests {
 		await session.value
 	}
 
+	@Test("adopts a new process on the next connection when the first connection's configuration read hung")
+	func adoptsAfterAHungReadOnAnEarlierConnection() async {
+		let first = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		first.workingDirs = ["api": "acme/api", "extra": "zeta/extra"]
+		let second = StubClient(processes: [
+			.init(name: "api", namespace: "api", status: .running, isRunning: true),
+		])
+		second.workingDirs = first.workingDirs
+		let viewModel = StackViewModel(client: first)
+
+		let session = Task { await viewModel.observe() }
+		await settle(viewModel)
+
+		first.hold(["extra"])
+		first.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { !viewModel.isGroupingComplete })
+
+		viewModel.use(second)
+		await settle(viewModel)
+
+		second.emit(.init(
+			state: .init(name: "extra", namespace: "api", status: .running, isRunning: true)
+		))
+		await settle(until: { viewModel.projects.map(\.name) == ["acme", "zeta"] && viewModel.isGroupingComplete })
+
+		#expect(viewModel.projects.map(\.name) == ["acme", "zeta"])
+		#expect(viewModel.isGroupingComplete)
+
+		first.hold([])
+		second.finishStream()
+		session.cancel()
+		await session.value
+	}
+
 	@Test("says what a start will leave behind before it runs")
 	func asksWhenADependencyWillNotStart() async {
 		let client = StubClient(processes: [
@@ -2091,7 +2129,7 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 		}
 
 		while configurationLock.withLock({ heldConfigurations.contains(name) }) {
-			try? await Task.sleep(for: .milliseconds(5))
+			try await Task.sleep(for: .milliseconds(5))
 		}
 
 		let refusingNow = configurationLock.withLock {
