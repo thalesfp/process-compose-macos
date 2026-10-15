@@ -522,14 +522,8 @@ struct ServerSupervisorTests {
 	@Test("calls off a launch still being checked when asked to stop")
 	func callsOffALaunchWhenStopped() async {
 		let runner = FakeRunner()
-		var isChecking = false
-		var isReleased = false
-		runner.whileValidating = { isChecking = true }
-		runner.validationGate = {
-			while !isReleased {
-				try? await Task.sleep(for: .milliseconds(5))
-			}
-		}
+		let gate = Gate()
+		runner.validationGate = { await gate.enter() }
 		let supervisor = ServerSupervisor(
 			runner: runner,
 			reachability: FakeReachability(false),
@@ -538,9 +532,9 @@ struct ServerSupervisorTests {
 		await supervisor.use(address: .standard, plan: .test)
 
 		let starting = Task { await supervisor.start() }
-		await settle(until: { isChecking })
+		await settle(until: { gate.isHolding })
 		await supervisor.stop()
-		isReleased = true
+		gate.open()
 		await starting.value
 
 		#expect(runner.launched.isEmpty)
@@ -1464,9 +1458,9 @@ private final class FakeRunner: ServerRunner {
 		return process
 	}
 
-	nonisolated(unsafe) var whileValidating: (() -> Void)?
+	var whileValidating: (() -> Void)?
 	/// Keeps a check open until it returns, so a test can act while a launch is still deciding.
-	nonisolated(unsafe) var validationGate: (@MainActor () async -> Void)?
+	var validationGate: (@MainActor () async -> Void)?
 
 	func validate(_ plan: ServerLaunchPlan) async -> ServerValidation {
 		whileValidating?()
@@ -1570,8 +1564,8 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 		self.record = record
 	}
 
-	nonisolated(unsafe) var refusesClaim = false
-	nonisolated(unsafe) var savingFails = false
+	var refusesClaim = false
+	var savingFails = false
 
 	func claimLaunch(port: Int) -> ServerLaunchClaim? {
 		guard !refusesClaim else { return nil }

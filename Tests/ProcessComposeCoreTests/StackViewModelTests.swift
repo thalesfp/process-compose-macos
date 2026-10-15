@@ -247,6 +247,9 @@ struct StackViewModelTests {
 
 		#expect(client.started == ["api", "worker"])
 		#expect(viewModel.lastError == nil)
+
+		client.finishStream()
+		await session.value
 	}
 
 	@Test("leaves a process the config disabled switched off")
@@ -1268,7 +1271,7 @@ struct StackViewModelTests {
 	}
 
 	@Test("does nothing with an answer captured before the work was abandoned")
-	func ignoresAnAnswerCapturedBeforeAbandonment() async {
+	func ignoresAnAnswerCapturedBeforeAbandonment() async throws {
 		let client = StubClient(processes: [
 			.init(name: "api", namespace: "api", status: .running, isRunning: true),
 		])
@@ -1279,7 +1282,7 @@ struct StackViewModelTests {
 		await settle(viewModel)
 
 		viewModel.requestStopProject("acme")
-		let captured = try! #require(viewModel.confirmation)
+		let captured = try #require(viewModel.confirmation)
 
 		// The server behind the address is replaced while the question is on screen.
 		viewModel.abandonActions()
@@ -1337,11 +1340,11 @@ struct StackViewModelTests {
 	}
 
 	@Test("voids a log clear agreed to before the server was replaced")
-	func voidsAClearLogAnswerAfterAbandonment() {
+	func voidsAClearLogAnswerAfterAbandonment() throws {
 		let viewModel = StackViewModel(client: StubClient(processes: []))
 
 		viewModel.ask(.clearLog("api"))
-		let captured = try! #require(viewModel.confirmation)
+		let captured = try #require(viewModel.confirmation)
 
 		viewModel.abandonActions()
 
@@ -1801,7 +1804,7 @@ struct StackViewModelTests {
 		let viewModel = StackViewModel(client: unreachable(), readDefinition: { _ in acmeDefinition })
 		viewModel.define(from: localPlan)
 		await viewModel.observe()
-		client.beforeProjectState = { await viewModel.refreshDefinition() }
+		client.beforeProjectState = { viewModel.refreshDefinition() }
 		viewModel.use(client)
 
 		await settle(viewModel)
