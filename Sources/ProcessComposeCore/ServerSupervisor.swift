@@ -269,7 +269,14 @@ public final class ServerSupervisor {
 
 	/// A stack an earlier run left going is already on, so taking it back is not starting one.
 	private func resumeRecorded(at address: ServerAddress, generation mine: Int) async {
-		let isRecorded = records.load(port: address.port) != nil
+		let isRecorded: Bool
+
+		do {
+			isRecorded = try records.load(port: address.port) != nil
+		} catch {
+			state = .failed(reason: "Could not read the server record: \(error.localizedDescription)")
+			return
+		}
 
 		guard isRecorded else {
 			state = .idle
@@ -467,8 +474,18 @@ public final class ServerSupervisor {
 	/// The caller's claim is the one it runs under. Taking a second one for the same file
 	/// would fail against the lock this process is holding.
 	private func takeOver(port: Int, under claim: borrowing ServerLaunchClaim) -> Bool {
+		let recorded: ServerRecord
+
+		do {
+			guard let found = try records.load(port: port) else { return false }
+
+			recorded = found
+		} catch {
+			log.append("Could not read the server record: \(error.localizedDescription)")
+			return false
+		}
+
 		guard
-			let recorded = records.load(port: port),
 			// A record whose app is still running belongs to that copy, and stopping its
 			// server would take the stack out from under it.
 			recorded.owner == owner || !runner.isRunning(recorded.owner),
@@ -501,7 +518,16 @@ public final class ServerSupervisor {
 	/// one would only replace the record that makes the first recoverable. Says whether the
 	/// recorded stack decided the state.
 	private func settleRecorded(port: Int, under claim: borrowing ServerLaunchClaim) -> Bool {
-		guard let recorded = records.load(port: port) else { return false }
+		let recorded: ServerRecord
+
+		do {
+			guard let found = try records.load(port: port) else { return false }
+
+			recorded = found
+		} catch {
+			state = .failed(reason: "Could not read the server record: \(error.localizedDescription)")
+			return true
+		}
 
 		if recorded.owner != owner, runner.isRunning(recorded.owner) {
 			state = .running(owned: false)

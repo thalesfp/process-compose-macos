@@ -60,7 +60,7 @@ public struct ServerRecord: Codable, Sendable, Hashable {
 public protocol ServerRecordStore: Sendable {
 	/// Records are kept per port: a copy of the app running a stack on one port must not
 	/// lose its record because another copy started one on a different port.
-	func load(port: Int) -> ServerRecord?
+	func load(port: Int) throws -> ServerRecord?
 	func save(_ record: ServerRecord) throws
 	func clear(_ record: ServerRecord) throws
 	/// Held from the last look at the port until the record is written, so two copies of the
@@ -112,14 +112,18 @@ public struct FileServerRecordStore: ServerRecordStore {
 
 	public enum Fault: Error, LocalizedError {
 		case unreadable
+		case unlockable
 
 		public var errorDescription: String? {
-			"The file recording the servers could not be read"
+			switch self {
+			case .unreadable: "The file recording the servers could not be read"
+			case .unlockable: "The lock guarding the file recording the servers could not be opened"
+			}
 		}
 	}
 
-	public func load(port: Int) -> ServerRecord? {
-		(try? all())?[String(port)]
+	public func load(port: Int) throws -> ServerRecord? {
+		try all()[String(port)]
 	}
 
 	/// Throws rather than starting again from nothing: the file holds the records of every
@@ -190,7 +194,7 @@ public struct FileServerRecordStore: ServerRecordStore {
 	private func holdingTheLock(_ body: () throws -> Void) throws {
 		let gate = open(url.appendingPathExtension("lock").path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
 
-		guard gate >= 0 else { return try body() }
+		guard gate >= 0 else { throw Fault.unlockable }
 
 		defer { close(gate) }
 

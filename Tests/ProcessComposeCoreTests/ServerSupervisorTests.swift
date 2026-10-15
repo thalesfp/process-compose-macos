@@ -669,6 +669,24 @@ struct ServerSupervisorTests {
 		#expect(records.record == record)
 	}
 
+	@Test("reports a server record it cannot read instead of starting as if there were none")
+	func reportsAnUnreadableRecord() async {
+		let runner = FakeRunner()
+		let records = MemoryRecordStore(record: ServerRecord(group: 4242, port: 28080, owner: .test(901)))
+		records.loadingFails = true
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: records,
+			owner: .test(901)
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+
+		if case .failed = supervisor.state {} else { Issue.record("expected a failure, got \(supervisor.state)") }
+		#expect(runner.launched.isEmpty)
+	}
+
 	@Test("starts nothing when Settings points at another machine")
 	func refusesToStartForARemoteAddress() async {
 		let runner = FakeRunner()
@@ -1545,7 +1563,7 @@ private final class FakeServerProcess: ServerProcess {
 	}
 }
 
-enum StoreFailure: Error { case full }
+enum StoreFailure: Error { case full, unreadable }
 
 private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 	private(set) var record: ServerRecord?
@@ -1554,8 +1572,10 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 		self.record = record
 	}
 
-	func load(port: Int) -> ServerRecord? {
-		record?.port == port ? record : nil
+	func load(port: Int) throws -> ServerRecord? {
+		if loadingFails { throw StoreFailure.unreadable }
+
+		return record?.port == port ? record : nil
 	}
 
 	func save(_ record: ServerRecord) throws {
@@ -1566,6 +1586,7 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 
 	var refusesClaim = false
 	var savingFails = false
+	var loadingFails = false
 
 	func claimLaunch(port: Int) -> ServerLaunchClaim? {
 		guard !refusesClaim else { return nil }

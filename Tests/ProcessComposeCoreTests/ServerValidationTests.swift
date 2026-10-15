@@ -341,6 +341,44 @@ struct ServerRecordStoreTests {
 		#expect(try String(contentsOf: file, encoding: .utf8) == "not json at all")
 	}
 
+	@Test("reports records it cannot read instead of finding none")
+	func reportsUnreadableRecords() throws {
+		let directory = try scratchDirectory("unreadable-load")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let file = directory.appendingPathComponent("server.json")
+		let store = FileServerRecordStore(url: file)
+		try "not json at all".write(to: file, atomically: true, encoding: .utf8)
+
+		#expect(throws: FileServerRecordStore.Fault.self) {
+			try store.load(port: 28080)
+		}
+	}
+
+	@Test("finds no record when nothing was ever recorded")
+	func findsNoRecordInAFreshDirectory() throws {
+		let directory = try scratchDirectory("fresh")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
+
+		#expect(try store.load(port: 28080) == nil)
+	}
+
+	@Test("refuses to write without the cross-process lock")
+	func refusesToWriteWithoutTheLock() throws {
+		let directory = try scratchDirectory("no-lock")
+		defer { try? FileManager.default.removeItem(at: directory) }
+
+		let file = directory.appendingPathComponent("server.json")
+		let store = FileServerRecordStore(url: file)
+		try FileManager.default.createDirectory(at: file.appendingPathExtension("lock"), withIntermediateDirectories: false)
+
+		#expect(throws: FileServerRecordStore.Fault.self) {
+			try store.save(ServerRecord(group: 100, port: 28080, owner: ServerOwner(pid: 900, startedAt: 1)))
+		}
+	}
+
 	@Test("refuses to write over records it is not allowed to read")
 	func refusesToWriteOverUnopenableRecords() throws {
 		let directory = try scratchDirectory("forbidden")
@@ -370,11 +408,11 @@ struct ServerRecordStoreTests {
 		try store.save(theirs)
 		try store.clear(mine)
 
-		#expect(store.load(port: 28080) == theirs)
+		#expect(try store.load(port: 28080) == theirs)
 
 		try store.clear(theirs)
 
-		#expect(store.load(port: 28080) == nil)
+		#expect(try store.load(port: 28080) == nil)
 	}
 
 	@Test("keeps the record of a stack on another port")
@@ -389,13 +427,13 @@ struct ServerRecordStoreTests {
 		try store.save(here)
 		try store.save(there)
 
-		#expect(store.load(port: 28080) == here)
-		#expect(store.load(port: 28099) == there)
+		#expect(try store.load(port: 28080) == here)
+		#expect(try store.load(port: 28099) == there)
 
 		try store.clear(here)
 
-		#expect(store.load(port: 28080) == nil)
-		#expect(store.load(port: 28099) == there)
+		#expect(try store.load(port: 28080) == nil)
+		#expect(try store.load(port: 28099) == there)
 	}
 }
 
@@ -481,7 +519,7 @@ struct ServerRecoveryTests {
 		_ = try? await recovering.value
 
 		#expect(supervisor.state == .running(owned: true))
-		#expect(store.load(port: ServerAddress.defaultPort)?.owner.pid == 901)
+		#expect(try store.load(port: ServerAddress.defaultPort)?.owner.pid == 901)
 	}
 }
 
