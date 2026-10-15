@@ -7,7 +7,7 @@ import UserNotifications
 /// Tells the user about failures they were not there to see: a count on the Dock icon and
 /// one notification per batch, which selects the process when clicked.
 final class FailureAlerts: NSObject, UNUserNotificationCenterDelegate {
-	private nonisolated static let processKey = "process"
+	private static let processKey = "process"
 
 	private let model: StackViewModel
 	private let logger = Logger(subsystem: "me.thales.process-compose", category: "FailureAlerts")
@@ -79,15 +79,13 @@ final class FailureAlerts: NSObject, UNUserNotificationCenterDelegate {
 		}
 	}
 
-	nonisolated func userNotificationCenter(
+	func userNotificationCenter(
 		_ center: UNUserNotificationCenter,
 		didReceive response: UNNotificationResponse
 	) async {
 		let name = response.notification.request.content.userInfo[Self.processKey] as? String
 
-		await MainActor.run {
-			NSApp.activate()
-			name.map(model.reveal)
-		}
+		NSApp.activate()
+		name.map(model.reveal)
 	}
 }
