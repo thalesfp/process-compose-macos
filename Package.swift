@@ -8,7 +8,7 @@ let approachable: [SwiftSetting] = [
 
 let package = Package(
 	name: "process-compose-macos",
-	platforms: [.macOS(.v14)],
+	platforms: [.macOS(.v15)],
 	dependencies: [
 		.package(url: "https://github.com/jpsim/Yams.git", from: "6.2.2"),
 	],

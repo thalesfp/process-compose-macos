@@ -10,7 +10,7 @@ Unofficial project. Not affiliated with or endorsed by process-compose.
 
 ## Requirements
 
-- macOS 14 or later
+- macOS 15 or later
 - process-compose, either already running with its REST API reachable or installed for the app to start
 
 ## Install
