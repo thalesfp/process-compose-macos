@@ -230,33 +230,13 @@ struct StackView: View {
 	@ToolbarContentBuilder
 	private var toolbar: some ToolbarContent {
 		ToolbarItem(placement: .status) {
-			HStack(spacing: 12) {
-				statusDot(
-					isConnected ? "Connected" : "Offline",
-					color: isConnected ? .green : .red,
-					describedBy: isConnected ? "Connected to the server" : "Not connected to the server"
-				)
-
-				if isConnected {
-					if let uptime = model.uptime {
-						Divider()
-							.frame(height: 12)
-						uptimeReadout(uptime)
-					}
-
-					Divider()
-						.frame(height: 12)
-					usageReadout
-				}
-
-				Divider()
-					.frame(height: 12)
-				serverReadout
-
-				Divider()
-					.frame(height: 12)
-				mcpReadout
-			}
+			ConnectionReadouts(
+				model: model,
+				mcpModel: mcpModel,
+				server: server,
+				windowState: windowState,
+				serverStatus: serverStatus
+			)
 		}
 
 		// macOS 27 packs a .primaryAction item against a centered .status item without this.
@@ -265,81 +245,8 @@ struct StackView: View {
 		}
 
 		ToolbarItem(placement: .primaryAction) {
-			powerControl
+			PowerControl(model: model, server: server)
 		}
-	}
-
-	private func statusDot(
-		_ label: String,
-		signal: StatusSignal = .on,
-		color: Color,
-		describedBy description: String
-	) -> some View {
-		Label {
-			Text(label)
-				.font(.callout)
-				.foregroundStyle(.secondary)
-		} icon: {
-			StatusMark(signal: signal, color: color)
-		}
-		.labelStyle(.titleAndIcon)
-		.accessibilityElement(children: .ignore)
-		.accessibilityLabel(description)
-	}
-
-	private var mcpReadout: some View {
-		let help = mcpHelp
-
-		return Menu {
-			Text(mcpHelp)
-
-			Divider()
-
-			Button("Copy MCP URL") { mcpModel.url.map { NSPasteboard.copy($0.absoluteString) } }
-				.disabled(mcpModel.url == nil)
-		} label: {
-			statusDot(
-				"MCP",
-				signal: mcpModel.isReachable ? .on : .off,
-				color: mcpModel.isReachable ? .green : .secondary,
-				describedBy: help
-			)
-		}
-		.menuIndicator(.hidden)
-		.fixedSize()
-		.help(help)
-	}
-
-	private var serverReadout: some View {
-		let help = serverStatus
-
-		return Menu {
-			Text(help)
-
-			Divider()
-
-			Button("Start Server") { Task { await server.start() } }
-				.disabled(!server.canStart)
-
-			Button("Stop Server…") { model.ask(.stopServer(identity: server.identity)) }
-				.disabled(!server.isOwned)
-
-			Button("Set Up Server…") { windowState.isSettingUpServer = true }
-
-			Divider()
-
-			Button(windowState.isShowingServerLog ? "Hide Server Log" : "Show Server Log") {
-				windowState.isShowingServerLog.toggle()
-			}
-
-			Button("Show Config in Finder") { NSWorkspace.shared.activateFileViewerSelecting(model.configURLs) }
-				.disabled(model.configURLs.isEmpty)
-		} label: {
-			statusDot("Server", signal: serverSignal, color: serverColor, describedBy: help)
-		}
-		.menuIndicator(.hidden)
-		.fixedSize()
-		.help(help)
 	}
 
 	/// A server the app tried and failed to start says so here, since the empty state is
@@ -357,22 +264,6 @@ struct StackView: View {
 			"Start the stack here, or run it yourself and the app picks it up."
 		case .running:
 			"The app connects as soon as the server answers."
-		}
-	}
-
-	private var serverSignal: StatusSignal {
-		switch server.state {
-		case .running: .on
-		case .failed: .failed
-		case .idle, .unconfigured, .remote: .off
-		}
-	}
-
-	private var serverColor: Color {
-		switch server.state {
-		case .running: .green
-		case .failed: .orange
-		case .idle, .unconfigured, .remote: .secondary
 		}
 	}
 
@@ -398,36 +289,11 @@ struct StackView: View {
 		}
 	}
 
-	private var mcpHelp: String {
-		guard let url = mcpModel.url else { return "Settings has no usable MCP port" }
-		return mcpModel.isReachable
-			? "MCP server answering at \(url.absoluteString)"
-			: "No MCP server at \(url.absoluteString)"
-	}
-
-	@ViewBuilder
-	private var powerControl: some View {
-		if power.isWorking {
-			ProgressView()
-				.controlSize(.small)
-				.accessibilityLabel("Working on the stack")
-		} else {
-			Button(power.title, systemImage: "power") { power.perform() }
-			.labelStyle(.titleAndIcon)
-			.disabled(!power.isEnabled)
-			.help(power.stops ? "Stop every running process" : "Start every process the stack defines")
-		}
-	}
-
-	private var power: PowerAction {
-		PowerAction(model: model, server: server)
-	}
-
 	@ViewBuilder
 	private var content: some View {
 		switch model.connection {
 		case .disconnected(_, .shown):
-			processList
+			ProcessList(model: model)
 				.safeAreaInset(edge: .top, spacing: 0) { stoppedBanner }
 		case .disconnected(let reason, let definition):
 			ContentUnavailableView {
@@ -448,24 +314,13 @@ struct StackView: View {
 				ProgressView("Connecting")
 					.frame(maxWidth: .infinity, maxHeight: .infinity)
 			} else {
-				processList
+				ProcessList(model: model)
 			}
 		}
 	}
 
-	private var processList: some View {
-		List(selection: $model.selection) {
-			ForEach(model.sections) { section in
-				Section {
-					ForEach(section.processes) { state in
-						row(for: state, kind: section.kind)
-					}
-				} header: {
-					sectionHeader(for: section)
-				}
-			}
-		}
-		.listStyle(.inset)
+	private var power: PowerAction {
+		PowerAction(model: model, server: server)
 	}
 
 	private var stoppedBanner: some View {
@@ -498,61 +353,6 @@ struct StackView: View {
 	}
 
 	/// The row and its context menu share one set of actions, so the two can never
-	/// offer different things for the same process.
-	private func row(for state: ProcessState, kind: ProcessKind) -> some View {
-		let name = state.name
-		let start: () -> Void = { Task { await model.startProcess(name) } }
-		let stop: () -> Void = { Task { await model.stopProcess(name) } }
-		let restart: () -> Void = { Task { await model.restartProcess(name) } }
-
-		return ProcessRow(
-			state: state,
-			kind: kind,
-			isBusy: model.isBusy(name),
-			canStart: model.canStart(name),
-			canStop: model.canStop(name),
-			start: start,
-			stop: stop,
-			restart: restart
-		)
-		.tag(name)
-		.contextMenu {
-			Button("Start", action: start)
-				.disabled(!model.canStart(name))
-			Button("Restart", action: restart)
-				.disabled(!model.canStop(name))
-			Button("Stop", action: stop)
-				.disabled(!model.canStop(name))
-			Divider()
-			Button("Show Log") { model.selection = name }
-			Button("Copy Name") { NSPasteboard.copy(name) }
-		}
-	}
-
-	/// Namespace and role, each shown only where it changes. The sidebar names the
-	/// project, so the list does not repeat it.
-	private func sectionHeader(for section: StackSection) -> some View {
-		// A pinned header only reserves the height of its content, so the breathing room
-		// goes on the labels themselves. Padding the container makes it cover the first row.
-		VStack(alignment: .leading, spacing: 6) {
-			if section.isFirstInNamespace {
-				Text(section.namespace)
-					.font(.title3.weight(.semibold))
-					.foregroundStyle(.secondary)
-					.padding(.top, 14)
-			}
-			if section.showsKind {
-				Text(section.kind.label)
-					.font(.body.weight(.medium))
-					.foregroundStyle(.tertiary)
-					.padding(.top, section.isFirstInNamespace ? 0 : 14)
-					.padding(.leading, 10)
-			}
-		}
-		.textCase(nil)
-		.frame(maxWidth: .infinity, alignment: .leading)
-	}
-
 
 	@ViewBuilder
 	private var errorBar: some View {
@@ -600,40 +400,6 @@ struct StackView: View {
 		.contentShape(Rectangle())
 		.accessibilityElement(children: .combine)
 		.accessibilityAddTraits(.isModal)
-	}
-
-	private func uptimeReadout(_ uptime: Duration) -> some View {
-		let label = uptime.compactLabel
-
-		return Label(label, systemImage: "clock")
-			.labelStyle(.titleAndIcon)
-			.font(.callout.monospacedDigit())
-			.foregroundStyle(.secondary)
-			.fixedSize()
-			.accessibilityElement(children: .ignore)
-			.accessibilityLabel("The server has been up for \(label)")
-			.help("Time since the server started")
-	}
-
-	/// Totals across every running process. A second `.status` toolbar item would be
-	/// collapsed into the overflow menu, so this lives inside the connection item.
-	private var usageReadout: some View {
-		let cpu = model.usage.cpuLabel
-		let memory = model.usage.memoryLabel
-
-		return HStack(spacing: 12) {
-			Label(cpu, systemImage: "cpu")
-			Label(memory, systemImage: "memorychip")
-		}
-		.labelStyle(.titleAndIcon)
-		.font(.callout.monospacedDigit())
-		.foregroundStyle(.secondary)
-		.fixedSize()
-		.accessibilityElement(children: .ignore)
-		.accessibilityLabel(
-			"The stack is using \(cpu) processor and \(memory) memory"
-		)
-		.help("Total across every running process")
 	}
 
 	private var subtitle: String {
