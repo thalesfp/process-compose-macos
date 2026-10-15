@@ -184,6 +184,10 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 
 		do {
 			(data, response) = try await session.data(for: request)
+		} catch is CancellationError {
+			throw CancellationError()
+		} catch let error as URLError where error.code == .cancelled {
+			throw error
 		} catch {
 			throw ProcessComposeError.unreachable(port: address.port)
 		}
