@@ -269,7 +269,14 @@ public final class ServerSupervisor {
 
 	/// A stack an earlier run left going is already on, so taking it back is not starting one.
 	private func resumeRecorded(at address: ServerAddress, generation mine: Int) async {
-		let claim = records.load(port: address.port) == nil ? nil : await claimLaunch(port: address.port)
+		let isRecorded = records.load(port: address.port) != nil
+
+		guard isRecorded else {
+			state = .idle
+			return
+		}
+
+		let claim = await claimLaunch(port: address.port)
 
 		guard isCurrent(mine) else { return }
 
@@ -428,14 +435,27 @@ public final class ServerSupervisor {
 		mine == generation
 	}
 
-	/// `held` is the claim the caller already has, if any.
-	private func attach(on address: ServerAddress, under held: ServerLaunchClaim? = nil) {
+	private func attach(on address: ServerAddress) {
 		if let server, server.isRunning {
 			state = .running(owned: true)
 			return
 		}
 
-		guard address.isLoopback, takeOver(port: address.port, under: held) else {
+		guard address.isLoopback, let claim = records.claimLaunch(port: address.port) else {
+			state = .running(owned: false)
+			return
+		}
+
+		attach(on: address, under: claim)
+	}
+
+	private func attach(on address: ServerAddress, under claim: borrowing ServerLaunchClaim) {
+		if let server, server.isRunning {
+			state = .running(owned: true)
+			return
+		}
+
+		guard address.isLoopback, takeOver(port: address.port, under: claim) else {
 			state = .running(owned: false)
 			return
 		}
@@ -444,15 +464,9 @@ public final class ServerSupervisor {
 	/// Takes a recorded server over, under the same claim a launch takes, and writes this
 	/// app into the record. Ownership that is not written down is ownership two copies can
 	/// both believe they have, and either quitting would stop the stack under the other.
-	/// `held` is the claim the caller already has. Taking a second one for the same file
-	/// would wait on a lock this process is holding, which is a wait that never ends.
-	private func takeOver(port: Int, under held: ServerLaunchClaim?) -> Bool {
-		let claim = held ?? records.claimLaunch(port: port)
-
-		guard claim != nil else { return false }
-
-		defer { _ = claim }
-
+	/// The caller's claim is the one it runs under. Taking a second one for the same file
+	/// would fail against the lock this process is holding.
+	private func takeOver(port: Int, under claim: borrowing ServerLaunchClaim) -> Bool {
 		guard
 			let recorded = records.load(port: port),
 			// A record whose app is still running belongs to that copy, and stopping its
@@ -486,7 +500,7 @@ public final class ServerSupervisor {
 	/// A server that is up but not answering yet still owns the port, and starting a second
 	/// one would only replace the record that makes the first recoverable. Says whether the
 	/// recorded stack decided the state.
-	private func settleRecorded(port: Int, under claim: ServerLaunchClaim) -> Bool {
+	private func settleRecorded(port: Int, under claim: borrowing ServerLaunchClaim) -> Bool {
 		guard let recorded = records.load(port: port) else { return false }
 
 		if recorded.owner != owner, runner.isRunning(recorded.owner) {
@@ -604,7 +618,6 @@ public final class ServerSupervisor {
 
 			record = mine
 			state = .running(owned: true)
-			_ = claim
 		} catch {
 			state = .failed(reason: error.localizedDescription)
 		}

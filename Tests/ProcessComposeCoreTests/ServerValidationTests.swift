@@ -286,14 +286,14 @@ struct ServerRecordStoreTests {
 		defer { try? FileManager.default.removeItem(at: directory) }
 
 		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
-		let held = try #require(store.claimLaunch(port: 28080))
+		let held = store.claimLaunch(port: 28080)
+		let isHeld = held != nil
 
+		#expect(isHeld)
 		// A wait here would be a wait on this same process, which nothing could end.
-		#expect(store.claimLaunch(port: 28080) == nil)
+		#expect(!canClaim(store, port: 28080))
 		// A different port is a different stack, and is not made to wait for this one.
-		#expect(store.claimLaunch(port: 28099) != nil)
-
-		_ = held
+		#expect(canClaim(store, port: 28099))
 	}
 
 	@Test("does not leave the claim in the hands of the stack it started")
@@ -304,17 +304,24 @@ struct ServerRecordStoreTests {
 		let store = FileServerRecordStore(url: directory.appendingPathComponent("server.json"))
 		let plan = try wrapper(in: directory, "sleep 30")
 
-		var claim = store.claimLaunch(port: 28080)
+		let server: any ServerProcess
 
-		#expect(claim != nil)
+		do {
+			let claim = store.claimLaunch(port: 28080)
+			let isHeld = claim != nil
 
-		let server = try LiveServerRunner().run(plan)
+			#expect(isHeld)
+
+			server = try LiveServerRunner().run(plan)
+		}
+
 		defer { server.kill() }
 
-		// The app lets go of the claim; the stack it started must not still be holding it.
-		claim = nil
+		#expect(canClaim(store, port: 28080))
+	}
 
-		#expect(store.claimLaunch(port: 28080) != nil)
+	private func canClaim(_ store: FileServerRecordStore, port: Int) -> Bool {
+		store.claimLaunch(port: port) != nil
 	}
 
 	@Test("refuses to write over records it cannot read")

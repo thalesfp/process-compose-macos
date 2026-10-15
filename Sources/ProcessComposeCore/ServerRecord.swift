@@ -69,7 +69,7 @@ public protocol ServerRecordStore: Sendable {
 }
 
 /// A claim on starting a server, released when it is let go of.
-public final class ServerLaunchClaim: Sendable {
+public struct ServerLaunchClaim: ~Copyable, Sendable {
 	private let gate: Int32
 
 	init?(path: String) {
