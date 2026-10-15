@@ -4,7 +4,7 @@ import Foundation
 /// A process-compose server the app can signal: either one it started or one a previous
 /// run left behind.
 @MainActor
-public protocol ServerProcess: AnyObject {
+public protocol ServerProcess: AnyObject, Sendable {
 	var pid: Int32 { get }
 	var isRunning: Bool { get }
 	/// What each of its groups is holding, so the stack can be recognised again later.

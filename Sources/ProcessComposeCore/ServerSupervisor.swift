@@ -679,7 +679,7 @@ public final class ServerSupervisor {
 	private func watch(_ started: any ServerProcess) {
 		watchTask?.cancel()
 		watchTask = Task { [weak self] in
-			let following = Task { [weak self] in
+			async let _: Void = { @MainActor [weak self] in
 				// A wrapper hands over within milliseconds, and a crash before that reached
 				// the record would leave it naming a process that has gone.
 				let closely = ContinuousClock.now.advanced(by: .seconds(5))
@@ -690,16 +690,14 @@ public final class ServerSupervisor {
 					try? await Task.sleep(for: interval)
 					self?.rememberMembers(of: started)
 				}
-			}
-			defer { following.cancel() }
-
-			let exit = Task { await started.exitCode() }
+			}()
+			async let exit = started.exitCode()
 
 			for await line in started.output {
 				self?.log.append(line)
 			}
 
-			let code = await exit.value
+			let code = await exit
 
 			guard let self, self.server === started else { return }
 

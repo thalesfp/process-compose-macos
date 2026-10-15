@@ -234,6 +234,29 @@ struct ServerSupervisorTests {
 		#expect(records.record == nil)
 	}
 
+	@Test("stops waiting for the exit of a server it has let go of")
+	func stopsWaitingForAServerItLetGo() async {
+		let runner = FakeRunner()
+		let supervisor = ServerSupervisor(
+			runner: runner,
+			reachability: FakeReachability(false),
+			records: MemoryRecordStore()
+		)
+
+		await supervisor.use(address: .standard, plan: .test)
+		await supervisor.start()
+		runner.started?.withholdsExit = true
+		await supervisor.stop()
+
+		let deadline = ContinuousClock.now.advanced(by: .seconds(5))
+
+		while runner.started?.isAwaitingExit == true, ContinuousClock.now < deadline {
+			try? await Task.sleep(for: .milliseconds(10))
+		}
+
+		#expect(runner.started?.isAwaitingExit == false)
+	}
+
 	@Test("kills a server that ignores the request to stop")
 	func killsAStubbornServer() async {
 		let runner = FakeRunner()
@@ -1515,6 +1538,8 @@ private final class FakeServerProcess: ServerProcess {
 
 	private(set) var isRunning = true
 	var exitStatus: Int32 = 0
+	var withholdsExit = false
+	private(set) var isAwaitingExit = false
 	private(set) var didTerminate = false
 	private(set) var didKill = false
 
@@ -1537,9 +1562,17 @@ private final class FakeServerProcess: ServerProcess {
 	}
 
 	func exitCode() async -> Int32 {
-		while isRunning {
-			try? await Task.sleep(for: .milliseconds(1))
+		isAwaitingExit = true
+		defer { isAwaitingExit = false }
+
+		while isRunning || withholdsExit {
+			do {
+				try await Task.sleep(for: .milliseconds(1))
+			} catch {
+				break
+			}
 		}
+
 		return exitStatus
 	}
 
