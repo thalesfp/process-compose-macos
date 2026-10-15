@@ -124,13 +124,19 @@ public struct LiveServerRunner: ServerRunner {
 		let answer = FirstAnswer()
 
 		return await withCheckedContinuation { continuation in
-			Task {
-				answer.deliver(await reader.value, to: continuation)
+			let clock = Task {
+				do {
+					try await Task.sleep(for: timeout)
+				} catch {
+					return
+				}
+
+				answer.deliver(nil, to: continuation)
 			}
 
 			Task {
-				try? await Task.sleep(for: timeout)
-				answer.deliver(nil, to: continuation)
+				answer.deliver(await reader.value, to: continuation)
+				clock.cancel()
 			}
 		}
 	}
