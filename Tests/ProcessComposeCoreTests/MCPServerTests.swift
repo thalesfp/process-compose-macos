@@ -104,42 +104,32 @@ struct MCPProbeTests {
 
 /// Drops the watched endpoint while the probe is in flight, so `check` resumes against an
 /// address the view model has already moved off.
-final class EndpointChangingProbe: MCPServerProbe, @unchecked Sendable {
-	nonisolated(unsafe) weak var viewModel: MCPServerViewModel?
+@MainActor
+final class EndpointChangingProbe: MCPServerProbe {
+	weak var viewModel: MCPServerViewModel?
 
+	@MainActor
 	func isReachable(_ url: URL) async -> Bool {
-		await MainActor.run { viewModel?.watch(nil) }
+		viewModel?.watch(nil)
 
 		return true
 	}
 }
 
 /// `watch` starts a poll of its own, so the test's own call is not the only writer here.
-final class StubProbe: MCPServerProbe, @unchecked Sendable {
-	private let lock = NSLock()
-	private var probed: [String] = []
+@MainActor
+final class StubProbe: MCPServerProbe {
+	private(set) var asked: [String] = []
 	private let reachable: Bool
 
 	init(reachable: Bool = false) {
 		self.reachable = reachable
 	}
 
-	var asked: [String] {
-		lock.lock()
-		defer { lock.unlock() }
-		return probed
-	}
-
+	@MainActor
 	func isReachable(_ url: URL) async -> Bool {
-		record(url.absoluteString)
+		asked.append(url.absoluteString)
 
 		return reachable
-	}
-
-	private func record(_ url: String) {
-		lock.lock()
-		defer { lock.unlock() }
-
-		probed.append(url)
 	}
 }

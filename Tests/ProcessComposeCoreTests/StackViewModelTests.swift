@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ProcessComposeCore
@@ -2082,16 +2083,54 @@ struct ProcessStateTests {
 	}
 }
 
-final class StubClient: ProcessComposeClient, @unchecked Sendable {
-	nonisolated(unsafe) var actionFailure: (any Error)?
-	nonisolated(unsafe) var refusingProcesses: Set<String> = []
-	nonisolated(unsafe) var started: [String] = []
-	nonisolated(unsafe) var stopped: [String] = []
+final class StubClient: ProcessComposeClient {
+	private struct State {
+		var actionFailure: (any Error)?
+		var refusingProcesses: Set<String> = []
+		var started: [String] = []
+		var stopped: [String] = []
+		var workingDirs: [String: String] = [:]
+		var dependencies: [String: [String]] = [:]
+		var logStreamFailure: (any Error)?
+		var truncated: [String] = []
+		var refusingConfigurations: Set<String> = []
+		var refusingConfigurationsOnce: Set<String> = []
+		var refusedOnce: Set<String> = []
+		var heldConfigurations: Set<String> = []
+		var holdingActions = false
+		var beforeProjectState: (@MainActor @Sendable () async -> Void)?
+	}
 
-	nonisolated(unsafe) var workingDirs: [String: String] = [:]
-	nonisolated(unsafe) var dependencies: [String: [String]] = [:]
-	nonisolated(unsafe) var logStreamFailure: (any Error)?
-	nonisolated(unsafe) var truncated: [String] = []
+	private let state = Mutex(State())
+
+	var actionFailure: (any Error)? {
+		get { state.withLock { $0.actionFailure } }
+		set { state.withLock { $0.actionFailure = newValue } }
+	}
+
+	var refusingProcesses: Set<String> {
+		get { state.withLock { $0.refusingProcesses } }
+		set { state.withLock { $0.refusingProcesses = newValue } }
+	}
+
+	var started: [String] { state.withLock { $0.started } }
+	var stopped: [String] { state.withLock { $0.stopped } }
+	var truncated: [String] { state.withLock { $0.truncated } }
+
+	var workingDirs: [String: String] {
+		get { state.withLock { $0.workingDirs } }
+		set { state.withLock { $0.workingDirs = newValue } }
+	}
+
+	var dependencies: [String: [String]] {
+		get { state.withLock { $0.dependencies } }
+		set { state.withLock { $0.dependencies = newValue } }
+	}
+
+	var logStreamFailure: (any Error)? {
+		get { state.withLock { $0.logStreamFailure } }
+		set { state.withLock { $0.logStreamFailure = newValue } }
+	}
 
 	private let loadResult: Result<[ProcessState], any Error>
 	private let stream: AsyncThrowingStream<ProcessStateEvent, any Error>
@@ -2110,17 +2149,20 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 
 	func processes() async throws -> [ProcessState] { try loadResult.get() }
 
-	nonisolated(unsafe) var refusingConfigurations: Set<String> = []
-	/// Names whose first configuration request fails and whose second succeeds.
-	nonisolated(unsafe) var refusingConfigurationsOnce: Set<String> = []
+	var refusingConfigurations: Set<String> {
+		get { state.withLock { $0.refusingConfigurations } }
+		set { state.withLock { $0.refusingConfigurations = newValue } }
+	}
 
-	private let configurationLock = NSLock()
-	nonisolated(unsafe) private var refusedOnce: Set<String> = []
-	nonisolated(unsafe) private var heldConfigurations: Set<String> = []
+	/// Names whose first configuration request fails and whose second succeeds.
+	var refusingConfigurationsOnce: Set<String> {
+		get { state.withLock { $0.refusingConfigurationsOnce } }
+		set { state.withLock { $0.refusingConfigurationsOnce = newValue } }
+	}
 
 	/// Holds a configuration request open, so a test can see what happens meanwhile.
 	func hold(_ names: Set<String>) {
-		configurationLock.withLock { heldConfigurations = names }
+		state.withLock { $0.heldConfigurations = names }
 	}
 
 	func configuration(for name: String) async throws -> ProcessConfiguration {
@@ -2128,21 +2170,26 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 			throw ProcessComposeError.unreachable(port: 28080)
 		}
 
-		while configurationLock.withLock({ heldConfigurations.contains(name) }) {
+		while state.withLock({ $0.heldConfigurations.contains(name) }) {
 			try await Task.sleep(for: .milliseconds(5))
 		}
 
-		let refusingNow = configurationLock.withLock {
-			refusingConfigurationsOnce.contains(name) && refusedOnce.insert(name).inserted
+		let refusingNow = state.withLock {
+			$0.refusingConfigurationsOnce.contains(name) && $0.refusedOnce.insert(name).inserted
 		}
 
 		guard !refusingNow else { throw ProcessComposeError.unreachable(port: 28080) }
 
-		return ProcessConfiguration(workingDir: workingDirs[name], dependsOn: dependencies[name] ?? [])
+		let (workingDir, dependsOn) = state.withLock { ($0.workingDirs[name], $0.dependencies[name] ?? []) }
+
+		return ProcessConfiguration(workingDir: workingDir, dependsOn: dependsOn)
 	}
 
 	/// Lets a test hold a connection inside its setup phase.
-	nonisolated(unsafe) var beforeProjectState: (() async -> Void)?
+	var beforeProjectState: (@MainActor @Sendable () async -> Void)? {
+		get { state.withLock { $0.beforeProjectState } }
+		set { state.withLock { $0.beforeProjectState = newValue } }
+	}
 
 	func projectState() async throws -> ProjectState {
 		await beforeProjectState?()
@@ -2158,20 +2205,18 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 	}
 
 	func start(_ name: String) async throws {
-		started.append(name)
+		state.withLock { $0.started.append(name) }
 		try failIfConfigured(name)
 	}
 
-	nonisolated(unsafe) private var holdingActions = false
-
 	/// Keeps a process action in flight, so a test can look at the model while it is busy.
 	var holdActions: Bool {
-		get { configurationLock.withLock { holdingActions } }
-		set { configurationLock.withLock { holdingActions = newValue } }
+		get { state.withLock { $0.holdingActions } }
+		set { state.withLock { $0.holdingActions = newValue } }
 	}
 
 	func stop(_ name: String) async throws {
-		stopped.append(name)
+		state.withLock { $0.stopped.append(name) }
 
 		while holdActions {
 			try? await Task.sleep(for: .milliseconds(5))
@@ -2192,7 +2237,7 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 	}
 
 	func truncateLogs(for name: String) async throws {
-		truncated.append(name)
+		state.withLock { $0.truncated.append(name) }
 		try failIfConfigured()
 	}
 
@@ -2200,9 +2245,11 @@ final class StubClient: ProcessComposeClient, @unchecked Sendable {
 	func finishLogStream() { logContinuation.finish() }
 
 	private func failIfConfigured(_ name: String? = nil) throws {
-		if let name, refusingProcesses.contains(name) {
+		let (refusing, failure) = state.withLock { ($0.refusingProcesses, $0.actionFailure) }
+
+		if let name, refusing.contains(name) {
 			throw ProcessComposeError.server(message: "no such process: \(name)")
 		}
-		if let actionFailure { throw actionFailure }
+		if let failure { throw failure }
 	}
 }

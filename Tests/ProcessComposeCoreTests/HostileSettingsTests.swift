@@ -200,13 +200,15 @@ struct StackSummaryTests {
 }
 
 /// A clock the test moves by hand, since Date() cannot be rewound.
-final class MovableClock: @unchecked Sendable {
+@MainActor
+final class MovableClock {
 	var now = Date(timeIntervalSince1970: 0)
 }
 
 
 /// Holds a caller inside an async call until the test lets it go.
-final class Gate: @unchecked Sendable {
+@MainActor
+final class Gate {
 	private(set) var isHolding = false
 	private var release: CheckedContinuation<Void, Never>?
 

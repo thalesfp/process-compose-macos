@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ProcessComposeCore
@@ -86,20 +87,13 @@ struct ServerValidationTests {
 }
 
 /// Holds the answer so a check that never returns fails the test instead of hanging it.
-private final class Answer: @unchecked Sendable {
-	private let lock = NSLock()
-	private var answer: ServerValidation?
+private final class Answer: Sendable {
+	private let answer = Mutex<ServerValidation?>(nil)
 
-	var value: ServerValidation? {
-		lock.lock()
-		defer { lock.unlock() }
-		return answer
-	}
+	var value: ServerValidation? { answer.withLock { $0 } }
 
 	func set(_ value: ServerValidation) {
-		lock.lock()
-		answer = value
-		lock.unlock()
+		answer.withLock { $0 = value }
 	}
 }
 

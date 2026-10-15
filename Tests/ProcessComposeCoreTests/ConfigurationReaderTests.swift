@@ -1,27 +1,33 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ProcessComposeCore
 
 /// Answers for the names it was given, and can be told to refuse a name for a set number
 /// of attempts, so the retry can be watched from outside.
-private final class ConfigurationStub: ProcessComposeClient, @unchecked Sendable {
-	private let lock = NSLock()
-	private var refusals: [String: Int]
-	private(set) var attempts: [String] = []
+private final class ConfigurationStub: ProcessComposeClient {
+	private struct State {
+		var refusals: [String: Int]
+		var attempts: [String] = []
+	}
+
+	private let state: Mutex<State>
 	let known: Set<String>
 
 	init(known: Set<String>, refusing refusals: [String: Int] = [:]) {
 		self.known = known
-		self.refusals = refusals
+		state = Mutex(State(refusals: refusals))
 	}
 
-	func configuration(for name: String) async throws -> ProcessConfiguration {
-		try lock.withLock {
-			attempts.append(name)
+	var attempts: [String] { state.withLock { $0.attempts } }
 
-			if let left = refusals[name], left > 0 {
-				refusals[name] = left - 1
+	func configuration(for name: String) async throws -> ProcessConfiguration {
+		try state.withLock { state in
+			state.attempts.append(name)
+
+			if let left = state.refusals[name], left > 0 {
+				state.refusals[name] = left - 1
 				throw ProcessComposeError.server(message: "no")
 			}
 

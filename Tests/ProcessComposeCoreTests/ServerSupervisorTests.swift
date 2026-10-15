@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ProcessComposeCore
@@ -1416,7 +1417,8 @@ extension ServerLaunchPlan {
 	)!
 }
 
-private final class FakeReachability: ServerReachability, @unchecked Sendable {
+@MainActor
+private final class FakeReachability: ServerReachability {
 	var presence: ServerPresence
 
 	init(_ presence: ServerPresence) {
@@ -1427,47 +1429,29 @@ private final class FakeReachability: ServerReachability, @unchecked Sendable {
 		self.init(isReachable ? .processCompose : .nothing)
 	}
 
+	@MainActor
 	func look(at address: ServerAddress) async -> ServerPresence { presence }
 }
 
 /// Stands in for a probe still waiting on the network when its inputs change.
-private final class SlowReachability: ServerReachability, @unchecked Sendable {
-	private let lock = NSLock()
-	private var started = false
+@MainActor
+private final class SlowReachability: ServerReachability {
+	private(set) var didStart = false
 	private var released = false
 
-	var didStart: Bool {
-		lock.lock()
-		defer { lock.unlock() }
-		return started
-	}
-
 	func answerNow() {
-		lock.lock()
 		released = true
-		lock.unlock()
 	}
 
+	@MainActor
 	func look(at address: ServerAddress) async -> ServerPresence {
-		begin()
+		didStart = true
 
-		while !isReleased {
+		while !released {
 			try? await Task.sleep(for: .milliseconds(10))
 		}
 
 		return .nothing
-	}
-
-	private var isReleased: Bool {
-		lock.lock()
-		defer { lock.unlock() }
-		return released
-	}
-
-	private func begin() {
-		lock.lock()
-		started = true
-		lock.unlock()
 	}
 }
 
@@ -1598,28 +1582,52 @@ private final class FakeServerProcess: ServerProcess {
 
 enum StoreFailure: Error { case full, unreadable }
 
-private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
-	private(set) var record: ServerRecord?
+private final class MemoryRecordStore: ServerRecordStore {
+	private struct State {
+		var record: ServerRecord?
+		var refusesClaim = false
+		var savingFails = false
+		var loadingFails = false
+	}
+
+	private let state: Mutex<State>
 
 	init(record: ServerRecord? = nil) {
-		self.record = record
+		state = Mutex(State(record: record))
+	}
+
+	var record: ServerRecord? { state.withLock { $0.record } }
+
+	var refusesClaim: Bool {
+		get { state.withLock { $0.refusesClaim } }
+		set { state.withLock { $0.refusesClaim = newValue } }
+	}
+
+	var savingFails: Bool {
+		get { state.withLock { $0.savingFails } }
+		set { state.withLock { $0.savingFails = newValue } }
+	}
+
+	var loadingFails: Bool {
+		get { state.withLock { $0.loadingFails } }
+		set { state.withLock { $0.loadingFails = newValue } }
 	}
 
 	func load(port: Int) throws -> ServerRecord? {
-		if loadingFails { throw StoreFailure.unreadable }
+		try state.withLock { state in
+			if state.loadingFails { throw StoreFailure.unreadable }
 
-		return record?.port == port ? record : nil
+			return state.record?.port == port ? state.record : nil
+		}
 	}
 
 	func save(_ record: ServerRecord) throws {
-		if savingFails { throw StoreFailure.full }
+		try state.withLock { state in
+			if state.savingFails { throw StoreFailure.full }
 
-		self.record = record
+			state.record = record
+		}
 	}
-
-	var refusesClaim = false
-	var savingFails = false
-	var loadingFails = false
 
 	func claimLaunch(port: Int) -> ServerLaunchClaim? {
 		guard !refusesClaim else { return nil }
@@ -1631,8 +1639,10 @@ private final class MemoryRecordStore: ServerRecordStore, @unchecked Sendable {
 	}
 
 	func clear(_ record: ServerRecord) throws {
-		guard self.record == record else { return }
+		state.withLock { state in
+			guard state.record == record else { return }
 
-		self.record = nil
+			state.record = nil
+		}
 	}
 }
