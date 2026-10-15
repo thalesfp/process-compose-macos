@@ -352,8 +352,6 @@ struct StackView: View {
 		}
 	}
 
-	/// The row and its context menu share one set of actions, so the two can never
-
 	@ViewBuilder
 	private var errorBar: some View {
 		if let message = model.lastError {

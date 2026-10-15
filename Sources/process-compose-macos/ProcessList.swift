@@ -20,6 +20,7 @@ struct ProcessList: View {
 		.listStyle(.inset)
 	}
 
+	/// The row and its context menu share one set of actions, so the two can never
 	/// offer different things for the same process.
 	private func row(for state: ProcessState, kind: ProcessKind) -> some View {
 		let name = state.name
