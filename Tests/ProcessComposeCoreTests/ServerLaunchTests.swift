@@ -109,13 +109,26 @@ struct ServerLaunchTests {
 		#expect(refused == ["PC_NO_SERVER"])
 		#expect(plan.refusedSettings { _ in "FOO=1" }.isEmpty)
 
-		// Every form the loader behind .pc_env accepts.
-		for line in ["PC_NO_SERVER=1", "export PC_NO_SERVER=1", "PC_NO_SERVER: 1", "  PC_NO_SERVER =1"] {
-			#expect(plan.refusedSettings { _ in line } == ["PC_NO_SERVER"], "\(line)")
-		}
-
 		#expect(plan.refusedSettings { _ in "# PC_NO_SERVER=1" }.isEmpty)
 		#expect(plan.refusedSettings { _ in "PC_NO_SERVER_EXTRA=1" }.isEmpty)
+	}
+
+	// Every form the loader behind .pc_env accepts.
+	@Test(
+		"finds PC_NO_SERVER in every form the .pc_env loader accepts",
+		arguments: ["PC_NO_SERVER=1", "export PC_NO_SERVER=1", "PC_NO_SERVER: 1", "  PC_NO_SERVER =1"]
+	)
+	func findsEveryFormOfTheSetting(line: String) throws {
+		let plan = try #require(
+			ServerLaunchPlan(
+				executablePath: "/opt/homebrew/bin/process-compose",
+				configurationPath: "/Users/dev/stack/process-compose.yaml",
+				workingDirectoryPath: "/Users/dev",
+				port: 28080
+			)
+		)
+
+		#expect(plan.refusedSettings { _ in line } == ["PC_NO_SERVER"])
 	}
 
 	@Test("refuses a plan without a config file")

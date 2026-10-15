@@ -60,18 +60,14 @@ struct HostileSettingsTests {
 		#expect(address.url(path: "/processes").absoluteString == "http://example.local:9000/processes")
 	}
 
-	@Test("does not offer start for a process the server has already scheduled")
-	func refusesStartForScheduledProcesses() {
-		for status in [ProcessStatus.pending, .restarting, .terminating, .watching] {
-			#expect(!ProcessState(name: "api", status: status).canStart)
-		}
+	@Test("does not offer start for a process the server has already scheduled", arguments: [ProcessStatus.pending, .restarting, .terminating, .watching])
+	func refusesStartForScheduledProcesses(status: ProcessStatus) {
+		#expect(!ProcessState(name: "api", status: status).canStart)
 	}
 
-	@Test("offers start for a process that has finished or never ran")
-	func offersStartForFinishedProcesses() {
-		for status in [ProcessStatus.completed, .skipped, .disabled, .error] {
-			#expect(ProcessState(name: "api", status: status).canStart)
-		}
+	@Test("offers start for a process that has finished or never ran", arguments: [ProcessStatus.completed, .skipped, .disabled, .error])
+	func offersStartForFinishedProcesses(status: ProcessStatus) {
+		#expect(ProcessState(name: "api", status: status).canStart)
 	}
 }
 
