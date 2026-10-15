@@ -143,8 +143,6 @@ final class GroupedProcess: @unchecked Sendable {
 
 	/// Whether anything in the group is still there. A wrapper that starts the server and
 	/// exits leaves the work behind it, so the leader going is not the group going.
-	/// Whether anything the app started is still there. The launch group's own number is
-	/// not enough: it is handed out again once the group is gone.
 	var hasMembers: Bool {
 		lock.lock()
 		defer { lock.unlock() }
@@ -153,20 +151,6 @@ final class GroupedProcess: @unchecked Sendable {
 		// a launcher handing over to a child leaves the group occupied by something that has
 		// not been noted yet, and calling that gone would abandon a running stack.
 		return !liveGroups().isEmpty
-	}
-
-	/// Whether the child is over, without reaping it.
-	var hasExited: Bool {
-		lock.lock()
-		let done = reaped
-		lock.unlock()
-
-		if done { return true }
-
-		var info = siginfo_t()
-		let result = waitid(P_PID, id_t(pid), &info, WEXITED | WNOHANG | WNOWAIT)
-
-		return result != 0 || info.si_pid == pid
 	}
 
 	/// Hands over what the child prints as it arrives, and returns when the pipe ends.
@@ -187,8 +171,6 @@ final class GroupedProcess: @unchecked Sendable {
 	func track() {
 		noteManagedGroups(force: true)
 	}
-
-
 
 	// Walking the process table is not free, so it is walked at most twice a second while
 	// the leader lives.
@@ -238,12 +220,6 @@ final class GroupedProcess: @unchecked Sendable {
 		var info = siginfo_t()
 
 		while true {
-			guard isOurs else {
-				if !hasMembers { return }
-				usleep(interval)
-				continue
-			}
-
 			lock.lock()
 			let done = reaped
 			lock.unlock()
@@ -275,13 +251,6 @@ final class GroupedProcess: @unchecked Sendable {
 		return raw & 0x7F == 0 ? (raw >> 8) & 0xFF : -1
 	}
 
-	/// Reaping the leader is not the end of the group: a wrapper that starts the server and
-	/// exits is reaped while the stack it left behind still has to be signalled. The id is
-	/// only free for reuse once nothing is left, so that is what closes signalling.
-	///
-	/// process-compose puts each process it runs in a group of its own, so its services are
-	/// not in this one. They are noted on the way past and signalled too, since by the time
-	/// the leader is gone nothing points at them any more.
 	/// How far a signal reaches.
 	enum Reach {
 		/// The launch group alone. process-compose runs its own shutdown for the services it
@@ -293,6 +262,13 @@ final class GroupedProcess: @unchecked Sendable {
 		case everything
 	}
 
+	/// Reaping the leader is not the end of the group: a wrapper that starts the server and
+	/// exits is reaped while the stack it left behind still has to be signalled. The id is
+	/// only free for reuse once nothing is left, so that is what closes signalling.
+	///
+	/// process-compose puts each process it runs in a group of its own, so its services are
+	/// not in this one. They are noted on the way past and signalled too, since by the time
+	/// the leader is gone nothing points at them any more.
 	func signal(_ number: Int32, reach: Reach = .everything) {
 		noteManagedGroups(force: true)
 

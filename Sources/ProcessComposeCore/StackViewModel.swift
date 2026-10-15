@@ -158,7 +158,6 @@ public final class StackViewModel {
 	/// nothing observable on its own, so a ticker republishes this once a second.
 	public private(set) var uptime: Duration?
 
-	@MainActor
 	func refreshUptime() {
 		guard let project, let projectReadAt else {
 			uptime = nil

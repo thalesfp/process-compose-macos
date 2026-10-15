@@ -77,7 +77,7 @@ public struct ProjectGroup: Sendable, Identifiable, Hashable {
 	public let processes: [ProcessState]
 
 	public var id: String { name }
-	public var runningCount: Int { processes.filter(\.canStop).count }
+	public var runningCount: Int { processes.count(where: \.canStop) }
 	public var processCount: Int { processes.count }
 }
 

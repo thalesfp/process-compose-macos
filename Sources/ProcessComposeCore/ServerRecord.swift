@@ -1,9 +1,6 @@
 import Darwin
 import Foundation
 
-/// The server the app started, kept on disk so a crash does not leave one running that
-/// nothing owns. `owner` is the app that started it, so a second copy of the app can tell
-/// a server it may take over from one another copy is still running.
 /// Which app started a server. A pid alone is recycled, so the moment the process began
 /// goes with it: together they name one run of one app and nothing else.
 public struct ServerOwner: Codable, Sendable, Hashable {
@@ -30,6 +27,9 @@ public struct ServerOwner: Codable, Sendable, Hashable {
 	}
 }
 
+/// The server the app started, kept on disk so a crash does not leave one running that
+/// nothing owns. `owner` is the app that started it, so a second copy of the app can tell
+/// a server it may take over from one another copy is still running.
 public struct ServerRecord: Codable, Sendable, Hashable {
 	/// The group the server leads, not one process in it. The configured binary can be a
 	/// script that starts process-compose and exits, and then no single pid outlives the

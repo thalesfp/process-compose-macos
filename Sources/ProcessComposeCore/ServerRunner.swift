@@ -226,9 +226,6 @@ final class SpawnedServerProcess: ServerProcess {
 		// closely at first, since a wrapper can be gone in milliseconds, then rarely.
 		Task.detached {
 			// A service is only visible while the process that started it is alive to point at
-			// it, and a wrapper can start one and exit within a few milliseconds, so the
-			// first moments are watched closely and the rest is not.
-			// A service is only visible while the process that started it is alive to point at
 			// it, and the kernel cannot report the fork itself: NOTE_TRACK answers ENOTSUP on
 			// macOS. So the first moments are watched closely and the rest is not.
 			let start = ContinuousClock.now
