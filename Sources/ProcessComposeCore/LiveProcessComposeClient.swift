@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 public struct ServerAddress: Sendable, Hashable {
 	public let host: String
@@ -56,6 +57,8 @@ public struct ServerAddress: Sendable, Hashable {
 }
 
 public final class LiveProcessComposeClient: ProcessComposeClient {
+	private static let logger = Logger(subsystem: "me.thales.process-compose", category: "ProcessComposeClient")
+
 	private let address: ServerAddress
 	private let session: URLSession
 
@@ -160,7 +163,12 @@ public final class LiveProcessComposeClient: ProcessComposeClient {
 
 		guard let payload else { return nil }
 
-		return try? decoder.decode(Frame.self, from: payload)
+		do {
+			return try decoder.decode(Frame.self, from: payload)
+		} catch {
+			logger.debug("Dropped a stream frame that did not decode: \(error.localizedDescription, privacy: .public)")
+			return nil
+		}
 	}
 
 	private func escaped(_ name: String) -> String {

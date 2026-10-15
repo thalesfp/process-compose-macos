@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import os
 
 public enum ServerLifecycle: Sendable, Equatable {
 	/// Settings does not say what to start.
@@ -71,6 +72,8 @@ public struct LiveServerReachability: ServerReachability {
 public final class ServerSupervisor {
 	public private(set) var state: ServerLifecycle = .idle
 	public let log: ServerLog
+
+	private static let logger = Logger(subsystem: "me.thales.process-compose", category: "ServerSupervisor")
 
 	private let runner: any ServerRunner
 	private let reachability: any ServerReachability
@@ -248,6 +251,7 @@ public final class ServerSupervisor {
 			attach(on: address)
 			return
 		case .occupied:
+			Self.logger.error("Something that is not process-compose answers on port \(address.port, privacy: .public)")
 			state = .failed(reason: "Something that is not process-compose answers on port \(address.port)")
 			return
 		case .nothing:
@@ -274,6 +278,7 @@ public final class ServerSupervisor {
 		do {
 			isRecorded = try records.load(port: address.port) != nil
 		} catch {
+			Self.logger.error("Could not read the server record: \(error.localizedDescription, privacy: .public)")
 			state = .failed(reason: "Could not read the server record: \(error.localizedDescription)")
 			return
 		}
@@ -322,6 +327,7 @@ public final class ServerSupervisor {
 		case .nothing:
 			state = .idle
 		case .occupied:
+			Self.logger.error("Something that is not process-compose answers on port \(address.port, privacy: .public)")
 			state = .failed(reason: "Something that is not process-compose answers on port \(address.port)")
 		}
 
@@ -388,6 +394,7 @@ public final class ServerSupervisor {
 		// A stack that survived SIGKILL is still out there, and dropping the record would
 		// leave nothing able to find it again.
 		guard !server.isRunning else {
+			Self.logger.error("The stack is still running and could not be stopped")
 			state = .failed(reason: "The stack is still running and could not be stopped")
 			return .stillRunning
 		}
@@ -481,6 +488,7 @@ public final class ServerSupervisor {
 
 			recorded = found
 		} catch {
+			Self.logger.error("Could not read the server record: \(error.localizedDescription, privacy: .public)")
 			log.append("Could not read the server record: \(error.localizedDescription)")
 			return false
 		}
@@ -502,6 +510,7 @@ public final class ServerSupervisor {
 		do {
 			try records.save(mine)
 		} catch {
+			Self.logger.error("Could not take the server over: \(error.localizedDescription, privacy: .public)")
 			log.append("Could not take the server over: \(error.localizedDescription)")
 			return false
 		}
@@ -525,6 +534,7 @@ public final class ServerSupervisor {
 
 			recorded = found
 		} catch {
+			Self.logger.error("Could not read the server record: \(error.localizedDescription, privacy: .public)")
 			state = .failed(reason: "Could not read the server record: \(error.localizedDescription)")
 			return true
 		}
@@ -539,6 +549,7 @@ public final class ServerSupervisor {
 		// The recorded stack is still there but could not be taken over. Starting a second
 		// one would replace the only record that can still find the first.
 		if runner.isStackRunning(recorded.membership) {
+			Self.logger.error("A server is already running on port \(port, privacy: .public) that this app cannot take over")
 			state = .failed(reason: "A server is already running on port \(port) that this app cannot take over")
 			return true
 		}
@@ -579,6 +590,7 @@ public final class ServerSupervisor {
 		guard isCurrent(mine) else { return }
 
 		if case .failed(let reason) = validation {
+			Self.logger.error("\(reason, privacy: .public)")
 			state = .failed(reason: reason)
 			return
 		}
@@ -589,6 +601,7 @@ public final class ServerSupervisor {
 		// Without the claim there is no exclusion between copies of the app, and without the
 		// record a crash leaves the stack unrecoverable. Neither is worth starting without.
 		guard let claim = await claimLaunch(port: plan.port) else {
+			Self.logger.error("Could not claim the right to start a server")
 			state = .failed(reason: "Could not claim the right to start a server")
 			return
 		}
@@ -605,6 +618,7 @@ public final class ServerSupervisor {
 				attach(on: address, under: claim)
 				return
 			case .occupied:
+				Self.logger.error("Something that is not process-compose answers on port \(address.port, privacy: .public)")
 				state = .failed(reason: "Something that is not process-compose answers on port \(address.port)")
 				return
 			case .nothing:
@@ -638,6 +652,7 @@ public final class ServerSupervisor {
 				// A stack that would not stop has its own answer, which is the one to keep.
 				guard await shutDown() != .stillRunning else { return }
 
+				Self.logger.error("\(failure, privacy: .public)")
 				state = .failed(reason: failure)
 				return
 			}
@@ -645,6 +660,7 @@ public final class ServerSupervisor {
 			record = mine
 			state = .running(owned: true)
 		} catch {
+			Self.logger.error("\(error.localizedDescription, privacy: .public)")
 			state = .failed(reason: error.localizedDescription)
 		}
 	}
@@ -672,6 +688,7 @@ public final class ServerSupervisor {
 			try records.save(updated)
 			record = updated
 		} catch {
+			Self.logger.error("Could not record what the server is running: \(error.localizedDescription, privacy: .public)")
 			log.append("Could not record what the server is running: \(error.localizedDescription)")
 		}
 	}
@@ -738,6 +755,7 @@ public final class ServerSupervisor {
 		do {
 			try records.clear(record)
 		} catch {
+			Self.logger.error("Could not clear the server record: \(error.localizedDescription, privacy: .public)")
 			log.append("Could not clear the server record: \(error.localizedDescription)")
 		}
 	}
