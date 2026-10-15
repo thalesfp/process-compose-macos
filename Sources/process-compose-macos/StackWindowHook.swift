@@ -41,7 +41,7 @@ struct StackWindowHook: NSViewRepresentable {
 }
 
 /// Answers `windowShouldClose` and forwards everything else to the delegate it replaced.
-final class CloseProxy: NSObject, NSWindowDelegate {
+nonisolated final class CloseProxy: NSObject, NSWindowDelegate {
 	private let original: (any NSWindowDelegate)?
 	private let onClose: () -> Void
 

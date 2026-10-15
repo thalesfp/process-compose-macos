@@ -2,7 +2,6 @@ import ProcessComposeCore
 
 /// The power button, its menu item and the empty window's button. With no server up,
 /// starting the stack is starting the server, whose `up` starts every process.
-@MainActor
 struct PowerAction {
 	let model: StackViewModel
 	let server: ServerSupervisor

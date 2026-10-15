@@ -89,7 +89,6 @@ struct LogPane: View {
 }
 
 /// Clear, from the pane and the Log menu. It asks first unless the user said not to.
-@MainActor
 struct ClearLogAction {
 	let model: StackViewModel
 	let logModel: LogViewModel

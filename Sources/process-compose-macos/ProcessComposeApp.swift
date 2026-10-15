@@ -7,9 +7,9 @@ struct ProcessComposeApp: App {
 	@NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
 
 	private static let client = LiveProcessComposeClient(address: .fromEnvironment())
-	@MainActor fileprivate static let server = ServerSupervisor()
-	@MainActor fileprivate static let model = StackViewModel(client: client)
-	@MainActor fileprivate static let quit = QuitCoordinator(model: model, server: server)
+	fileprivate static let server = ServerSupervisor()
+	fileprivate static let model = StackViewModel(client: client)
+	fileprivate static let quit = QuitCoordinator(model: model, server: server)
 
 	@State private var model = ProcessComposeApp.model
 	@State private var logModel = LogViewModel(client: client)
@@ -50,7 +50,6 @@ struct ProcessComposeApp: App {
 
 // A SwiftPM executable launches as an accessory process, so the window would open
 // behind every other app and take no menu bar without an explicit activation policy.
-@MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
 	private var alerts: FailureAlerts?
 

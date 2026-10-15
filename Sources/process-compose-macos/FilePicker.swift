@@ -1,7 +1,6 @@
 import AppKit
 
 /// The open panel the setup sheet's rows share.
-@MainActor
 enum FilePicker {
 	static func choose(_ message: String, isDirectory: Bool = false, startingAt path: String = "") -> String? {
 		let panel = NSOpenPanel()

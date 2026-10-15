@@ -4,7 +4,6 @@ import ProcessComposeCore
 
 /// The one place a quit is decided and carried out, whether it came from closing the
 /// window, Cmd+Q, the Dock, or the Mac logging out.
-@MainActor
 @Observable
 final class QuitCoordinator {
 	// macOS waits about two minutes for a deferred reply before it gives up on a log out.

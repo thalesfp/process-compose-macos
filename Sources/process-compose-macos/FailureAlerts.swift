@@ -6,7 +6,6 @@ import UserNotifications
 
 /// Tells the user about failures they were not there to see: a count on the Dock icon and
 /// one notification per batch, which selects the process when clicked.
-@MainActor
 final class FailureAlerts: NSObject, UNUserNotificationCenterDelegate {
 	private nonisolated static let processKey = "process"
 
