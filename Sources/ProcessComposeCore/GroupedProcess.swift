@@ -1,34 +1,39 @@
 import Darwin
 import Foundation
+import Synchronization
 
 /// A child in a process group of its own, so a signal reaches whatever it spawned as well.
 /// `Foundation.Process` gives its children the app's own group, which cannot be signalled
 /// without signalling the app.
-final class GroupedProcess: @unchecked Sendable {
+final class GroupedProcess: Sendable {
 	let pid: pid_t
 
 	private let output: Int32
-	private let lock = NSLock()
-	private var reaped = false
-	private var reaping = false
-	private var finished = false
-	/// Each managed group with the identities of the members it was seen holding. A group id
-	/// is reused once its group is gone, so a member has to still be the one that was noted.
-	private var known: [pid_t: Set<ServerOwner>] = [:]
-	private var notedAt: UInt64 = 0
-	private var vacated = false
-
 	private let isOurs: Bool
+	private let state: Mutex<State>
+
+	fileprivate struct State {
+		var reaped = false
+		var reaping = false
+		var finished = false
+		/// Each managed group with the identities of the members it was seen holding. A group id
+		/// is reused once its group is gone, so a member has to still be the one that was noted.
+		var known: [pid_t: Set<ServerOwner>] = [:]
+		var notedAt: UInt64 = 0
+		var vacated = false
+	}
 
 	private init(pid: pid_t, output: Int32, isOurs: Bool = true) {
 		self.pid = pid
 		self.output = output
 		self.isOurs = isOurs
 
-		known = UnixProcess.groups(under: pid)
+		var known = UnixProcess.groups(under: pid)
 		if known[pid] == nil, let started = UnixProcess.startedAt(pid) {
 			known[pid] = [ServerOwner(pid: pid, startedAt: started)]
 		}
+
+		state = Mutex(State(known: known))
 	}
 
 	enum SpawnFailure: Error, LocalizedError {
@@ -62,7 +67,7 @@ final class GroupedProcess: @unchecked Sendable {
 		guard !confirmed.isEmpty else { return nil }
 
 		let taken = GroupedProcess(pid: group, output: -1, isOurs: false)
-		taken.known = confirmed
+		taken.state.withLock { $0.known = confirmed }
 
 		return taken
 	}
@@ -145,13 +150,10 @@ final class GroupedProcess: @unchecked Sendable {
 	/// Whether anything in the group is still there. A wrapper that starts the server and
 	/// exits leaves the work behind it, so the leader going is not the group going.
 	var hasMembers: Bool {
-		lock.lock()
-		defer { lock.unlock() }
-
 		// Whether the groups still hold anything, not whether the processes noted in them do:
 		// a launcher handing over to a child leaves the group occupied by something that has
 		// not been noted yet, and calling that gone would abandon a running stack.
-		return !liveGroups().isEmpty
+		state.withLock { !$0.liveGroups().isEmpty }
 	}
 
 	/// Hands over what the child prints as it arrives, and returns when the pipe ends.
@@ -178,40 +180,44 @@ final class GroupedProcess: @unchecked Sendable {
 	private func noteManagedGroups(force: Bool = false) {
 		let now = DispatchTime.now().uptimeNanoseconds
 
-		lock.lock()
-		let due = force || now &- notedAt > 500_000_000
-		if due { notedAt = now }
-		lock.unlock()
+		let due = state.withLock { state in
+			let due = force || now &- state.notedAt > 500_000_000
+			if due { state.notedAt = now }
+
+			return due
+		}
 
 		guard due else { return }
 
-		lock.lock()
-		// Seeded only from what is confirmed: a group whose number has been handed on holds
-		// somebody else's processes, and recording them would be enough to signal them later.
-		var seedGroups = Set(liveGroups())
-		let seeds = Set(known.values.flatMap { $0 }.filter(\.isRunning).map(\.pid))
+		let (seedGroups, seeds) = state.withLock { state in
+			// Seeded only from what is confirmed: a group whose number has been handed on holds
+			// somebody else's processes, and recording them would be enough to signal them later.
+			var seedGroups = Set(state.liveGroups())
+			let seeds = Set(state.known.values.flatMap { $0 }.filter(\.isRunning).map(\.pid))
 
-		// The launch group is this process's own, from before anything in it was enumerated,
-		// so it is seeded until the first time it is seen empty. After that its number is
-		// free and whatever holds it next is somebody else's.
-		if isOurs, !vacated {
-			if kill(-pid, 0) == 0 {
-				seedGroups.insert(pid)
-			} else {
-				vacated = true
+			// The launch group is this process's own, from before anything in it was enumerated,
+			// so it is seeded until the first time it is seen empty. After that its number is
+			// free and whatever holds it next is somebody else's.
+			if isOurs, !state.vacated {
+				if kill(-pid, 0) == 0 {
+					seedGroups.insert(pid)
+				} else {
+					state.vacated = true
+				}
 			}
+
+			return (seedGroups, seeds)
 		}
-		lock.unlock()
 
 		guard !seedGroups.isEmpty || !seeds.isEmpty else { return }
 
 		let found = UnixProcess.groups(from: seeds, groups: seedGroups)
 
-		lock.lock()
-		for (group, members) in found {
-			known[group, default: []].formUnion(members)
+		state.withLock { state in
+			for (group, members) in found {
+				state.known[group, default: []].formUnion(members)
+			}
 		}
-		lock.unlock()
 	}
 
 	/// Waits for the child to exit without reaping it, so the pid stays claimed and the
@@ -221,9 +227,7 @@ final class GroupedProcess: @unchecked Sendable {
 		var info = siginfo_t()
 
 		while true {
-			lock.lock()
-			let done = reaped
-			lock.unlock()
+			let done = state.withLock(\.reaped)
 
 			if done { return }
 
@@ -239,25 +243,23 @@ final class GroupedProcess: @unchecked Sendable {
 	/// free to hand the number to somebody else once the last of the group is reaped.
 	@discardableResult
 	func reap() -> Int32 {
-		lock.lock()
-		let isClaimable = isOurs && !reaped && !reaping
+		let isClaimable = state.withLock { state in
+			let isClaimable = isOurs && !state.reaped && !state.reaping
+			if isClaimable { state.reaping = true }
 
-		// waitpid answers only for a child of this process, and an adopted group is not one.
-		guard isClaimable else {
-			lock.unlock()
-			return -1
+			return isClaimable
 		}
 
-		reaping = true
-		lock.unlock()
+		// waitpid answers only for a child of this process, and an adopted group is not one.
+		guard isClaimable else { return -1 }
 
 		var raw: Int32 = 0
 		waitpid(pid, &raw, 0)
 
-		lock.lock()
-		reaped = true
-		reaping = false
-		lock.unlock()
+		state.withLock { state in
+			state.reaped = true
+			state.reaping = false
+		}
 
 		return raw & 0x7F == 0 ? (raw >> 8) & 0xFF : -1
 	}
@@ -283,44 +285,44 @@ final class GroupedProcess: @unchecked Sendable {
 	func signal(_ number: Int32, reach: Reach = .everything) {
 		noteManagedGroups(force: true)
 
-		lock.lock()
-		defer { lock.unlock() }
+		state.withLock { state in
+			guard !state.finished else { return }
 
-		guard !finished else { return }
+			let live = state.liveMembers()
 
-		let live = liveMembers()
+			if reach == .everything {
+				// Each member by name, since one remembered from before it moved would be missed
+				// by a signal to the group it was in then; and each group that still holds one of
+				// them, which is what reaches anything started since.
+				for member in live { kill(member.pid, number) }
 
-		if reach == .everything {
-			// Each member by name, since one remembered from before it moved would be missed
-			// by a signal to the group it was in then; and each group that still holds one of
-			// them, which is what reaches anything started since.
-			for member in live { kill(member.pid, number) }
+				for group in state.liveGroups() { kill(-group, number) }
+			} else if let control = state.controlGroup(launchedAs: pid) {
+				kill(-control, number)
+			}
 
-			for group in liveGroups() { kill(-group, number) }
-		} else if let control = controlGroup() {
-			kill(-control, number)
+			if live.isEmpty { state.finished = true }
 		}
-
-		if live.isEmpty { finished = true }
 	}
 
 	/// What each group is holding now, as identities that can be recorded and recognised
 	/// again later.
 	var membership: [pid_t: Set<ServerOwner>] {
-		lock.lock()
-		defer { lock.unlock() }
-
 		// Pruning is what drops a process from the group it has left, so this reports each
 		// one under the group holding it now.
-		_ = liveGroups()
+		state.withLock { state in
+			_ = state.liveGroups()
 
-		return known
+			return state.known
+		}
 	}
+}
 
+extension GroupedProcess.State {
 	/// Everything seen under the launch group that is still the process it was. The kernel
 	/// cannot report forks here, since NOTE_TRACK is not supported on macOS, so this is what
 	/// the walks of the process table have found.
-	private func liveMembers() -> Set<ServerOwner> {
+	mutating func liveMembers() -> Set<ServerOwner> {
 		var live: Set<ServerOwner> = []
 
 		for (group, members) in known {
@@ -339,7 +341,7 @@ final class GroupedProcess: @unchecked Sendable {
 	/// The group to ask to stop: the one the stack was launched in while it still holds
 	/// something, and otherwise the one holding what has been there longest, since a server
 	/// outlives the services it starts. A group whose number has been handed on is never it.
-	private func controlGroup() -> pid_t? {
+	mutating func controlGroup(launchedAs pid: pid_t) -> pid_t? {
 		let live = liveGroups()
 
 		if live.contains(pid) { return pid }
@@ -352,7 +354,7 @@ final class GroupedProcess: @unchecked Sendable {
 	/// The groups still holding a member this process saw them hold, the launch group
 	/// included. A group whose members have all gone is forgotten, since its number is then
 	/// free for something else to be given.
-	private func liveGroups() -> [pid_t] {
+	mutating func liveGroups() -> [pid_t] {
 		var live: [pid_t] = []
 
 		for (group, members) in known {

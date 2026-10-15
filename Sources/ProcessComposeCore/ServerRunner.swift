@@ -1,5 +1,6 @@
 import Darwin
 import Foundation
+import Synchronization
 
 /// A process-compose server the app can signal: either one it started or one a previous
 /// run left behind.
@@ -207,7 +208,7 @@ final class SpawnedServerProcess: ServerProcess {
 		// blocking inside a task holds one of the few threads the concurrency pool has. Enough
 		// of those and everything else on it stops, the tracking below included.
 		Thread.detachNewThread {
-			let buffer = LineBuffer()
+			var buffer = LineBuffer()
 			started.drain { data in
 				for line in buffer.take(data) { lineFeed.yield(line) }
 			}
@@ -310,31 +311,26 @@ final class AdoptedServerProcess: ServerProcess {
 }
 
 /// The checks running now, so a quit can take them with it.
-final class RunningChecks: @unchecked Sendable {
+final class RunningChecks: Sendable {
 	static let shared = RunningChecks()
 
-	private let lock = NSLock()
-	private var checks: [ObjectIdentifier: GroupedProcess] = [:]
+	private let checks = Mutex<[ObjectIdentifier: GroupedProcess]>([:])
 
 	func add(_ check: GroupedProcess) {
-		lock.lock()
-		defer { lock.unlock() }
-
-		checks[ObjectIdentifier(check)] = check
+		checks.withLock { $0[ObjectIdentifier(check)] = check }
 	}
 
 	func remove(_ check: GroupedProcess) {
-		lock.lock()
-		defer { lock.unlock() }
-
-		checks[ObjectIdentifier(check)] = nil
+		checks.withLock { $0[ObjectIdentifier(check)] = nil }
 	}
 
 	func endAll() {
-		lock.lock()
-		let running = Array(checks.values)
-		checks = [:]
-		lock.unlock()
+		let running = checks.withLock { checks in
+			let running = Array(checks.values)
+			checks = [:]
+
+			return running
+		}
 
 		for check in running { check.signal(SIGKILL) }
 	}
@@ -376,18 +372,18 @@ func onItsOwnThread<T: Sendable>(_ work: @escaping @Sendable () -> T) async -> T
 }
 
 /// Whichever of the reader and the clock answers first, once.
-private final class FirstAnswer: @unchecked Sendable {
-	private let lock = NSLock()
-	private var delivered = false
+private final class FirstAnswer: Sendable {
+	private let delivered = Mutex(false)
 
 	func deliver(
 		_ value: String?,
 		to continuation: CheckedContinuation<String?, Never>
 	) {
-		lock.lock()
-		let isFirst = !delivered
-		delivered = true
-		lock.unlock()
+		let isFirst = delivered.withLock { delivered in
+			defer { delivered = true }
+
+			return !delivered
+		}
 
 		guard isFirst else { return }
 
@@ -501,19 +497,15 @@ enum UnixProcess {
 
 /// Reassembles lines from pipe reads, which land on a background queue and split wherever
 /// the buffer happened to fill.
-private final class LineBuffer: @unchecked Sendable {
+private struct LineBuffer {
 	/// A process that writes a great deal without a newline, such as a progress bar, would
 	/// otherwise be held here in full.
 	static let longestLine = 1 << 20
 
 	private var pending = Data()
-	private let lock = NSLock()
 
 	/// What is left when there is no more to read: a line the writer never finished.
-	func rest() -> String? {
-		lock.lock()
-		defer { lock.unlock() }
-
+	mutating func rest() -> String? {
 		guard !pending.isEmpty else { return nil }
 
 		let line = String(decoding: LogBuffer.head(of: Array(pending)), as: UTF8.self)
@@ -522,10 +514,7 @@ private final class LineBuffer: @unchecked Sendable {
 		return line.isEmpty ? nil : line
 	}
 
-	func take(_ data: Data) -> [String] {
-		lock.lock()
-		defer { lock.unlock() }
-
+	mutating func take(_ data: Data) -> [String] {
 		pending.append(data)
 
 		if pending.count > Self.longestLine {
