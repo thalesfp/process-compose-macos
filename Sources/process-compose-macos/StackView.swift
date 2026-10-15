@@ -425,28 +425,31 @@ struct StackView: View {
 
 	@ViewBuilder
 	private var content: some View {
-		if model.isShowingDefinition {
+		switch model.connection {
+		case .disconnected(_, .shown):
 			processList
 				.safeAreaInset(edge: .top, spacing: 0) { stoppedBanner }
-		} else if case .disconnected(let reason) = model.connection {
+		case .disconnected(let reason, let definition):
 			ContentUnavailableView {
 				Label("No stack running", systemImage: "bolt.horizontal.circle")
 			} description: {
 				Text(reason)
 				Text(serverAdvice)
 					.font(.callout)
-				if let problem = model.definitionProblem {
+				if case .unreadable(let problem) = definition {
 					Text(problem)
 						.font(.callout)
 				}
 			} actions: {
 				offlineAction
 			}
-		} else if model.processes.isEmpty {
-			ProgressView("Connecting")
-				.frame(maxWidth: .infinity, maxHeight: .infinity)
-		} else {
-			processList
+		case .connecting, .connected:
+			if model.processes.isEmpty {
+				ProgressView("Connecting")
+					.frame(maxWidth: .infinity, maxHeight: .infinity)
+			} else {
+				processList
+			}
 		}
 	}
 

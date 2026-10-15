@@ -7,10 +7,25 @@ public enum StackPower: Sendable, Equatable {
 	case unavailable
 }
 
+/// What the window lists in place of a server's processes while none answers.
+public enum OfflineDefinition: Sendable, Equatable {
+	case none
+	/// The config's processes, shown stopped.
+	case shown
+	/// Why the config's processes could not be listed.
+	case unreadable(String)
+}
+
 public enum ConnectionState: Sendable, Equatable {
 	case connecting
 	case connected
-	case disconnected(reason: String)
+	case disconnected(reason: String, definition: OfflineDefinition)
+
+	public var definition: OfflineDefinition {
+		guard case .disconnected(_, let definition) = self else { return .none }
+
+		return definition
+	}
 }
 
 @MainActor
@@ -36,10 +51,7 @@ public final class StackViewModel {
 	public var isQuitting = false
 
 	/// Whether the rows are the config's processes, shown stopped because no server reports on them.
-	public private(set) var isShowingDefinition = false
-
-	/// Why the config's processes could not be listed.
-	public private(set) var definitionProblem: String?
+	public var isShowingDefinition: Bool { connection.definition == .shown }
 
 	/// Whether every process's project is known. The server answers for each process
 	/// separately, and one refusal leaves that process out of the grouping, where a
@@ -231,14 +243,13 @@ public final class StackViewModel {
 		clockTask?.cancel()
 		clockTask = nil
 		statesByName = [:]
-		isShowingDefinition = false
 		project = nil
 		uptime = nil
 		selection = nil
 		// Nothing is connected now, so asking for the address that was refused, or for the
 		// one before it, has to reconnect rather than be taken for where we already are.
 		connectedAddress = nil
-		connection = .disconnected(reason: reason)
+		connection = .disconnected(reason: reason, definition: .none)
 		refreshDefinition()
 	}
 
@@ -255,7 +266,6 @@ public final class StackViewModel {
 		abandonActions()
 		connection = .connecting
 		statesByName = [:]
-		isShowingDefinition = false
 		project = nil
 		lastError = nil
 		connect()
@@ -272,15 +282,13 @@ public final class StackViewModel {
 	public func refreshDefinition() {
 		guard case .disconnected = connection else { return }
 
-		definitionProblem = nil
-
 		guard let definitionPlan else { return showDefinition(nil) }
 
 		do {
 			showDefinition(try readDefinition(definitionPlan))
 		} catch {
-			definitionProblem = "Could not read \(definitionPlan.configuration.lastPathComponent): \(error.localizedDescription)"
 			showDefinition(nil)
+			setDefinition(.unreadable("Could not read \(definitionPlan.configuration.lastPathComponent): \(error.localizedDescription)"))
 		}
 	}
 
@@ -694,7 +702,6 @@ public final class StackViewModel {
 			let snapshot = try await client.processes()
 			guard isCurrent(mine) else { return }
 			statesByName = Dictionary(uniqueKeysWithValues: snapshot.map { ($0.name, $0) })
-			isShowingDefinition = false
 			connection = .connecting
 
 			async let state = try? await client.projectState()
@@ -751,11 +758,12 @@ public final class StackViewModel {
 	/// go with the connection rather than ageing on screen.
 	private func disconnect(reason: String) {
 		let wasDisconnected = if case .disconnected = connection { true } else { false }
+		let definition = connection.definition
 
 		project = nil
 		projectReadAt = nil
 		uptime = nil
-		connection = .disconnected(reason: reason)
+		connection = .disconnected(reason: reason, definition: definition)
 
 		guard !wasDisconnected else { return }
 
@@ -765,13 +773,14 @@ public final class StackViewModel {
 	private func showDefinition(_ definition: [DefinedProcess]?) {
 		guard let definition, !definition.isEmpty else {
 			if isShowingDefinition { forgetProcesses() }
+			setDefinition(.none)
 			return
 		}
 
 		statesByName = Dictionary(definition.map { ($0.name, $0.stoppedState) }) { _, last in last }
 		configurations = [:]
 		projectsByProcess = [:]
-		isShowingDefinition = true
+		setDefinition(.shown)
 		place(Dictionary(definition.map { ($0.name, $0.configuration) }) { _, last in last })
 	}
 
@@ -779,9 +788,14 @@ public final class StackViewModel {
 		statesByName = [:]
 		configurations = [:]
 		projectsByProcess = [:]
-		isShowingDefinition = false
 		recomputeGrouping()
 		reconcileSelection()
+	}
+
+	private func setDefinition(_ definition: OfflineDefinition) {
+		guard case .disconnected(let reason, _) = connection else { return }
+
+		connection = .disconnected(reason: reason, definition: definition)
 	}
 
 	/// Every await in `observe` is a point where the connection can be cancelled or

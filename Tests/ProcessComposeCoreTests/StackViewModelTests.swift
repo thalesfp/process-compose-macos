@@ -139,7 +139,7 @@ struct StackViewModelTests {
 
 		await viewModel.observe()
 
-		#expect(viewModel.connection == .disconnected(reason: "No process-compose server on port 28080"))
+		#expect(viewModel.connection == .disconnected(reason: "No process-compose server on port 28080", definition: .none))
 	}
 
 	@Test("names the process that failed to start")
@@ -1183,7 +1183,7 @@ struct StackViewModelTests {
 		viewModel.refuseAddress("Settings has no usable server address")
 		viewModel.use(client, at: .standard)
 
-		#expect(viewModel.connection != .disconnected(reason: "Settings has no usable server address"))
+		#expect(viewModel.connection != .disconnected(reason: "Settings has no usable server address", definition: .none))
 	}
 
 	@Test("stops nothing when a process starts while the stack question is open")
@@ -1923,7 +1923,7 @@ struct StackViewModelTests {
 
 		viewModel.refreshDefinition()
 
-		#expect(viewModel.definitionProblem == "Could not read process-compose.yaml: a ${ is never closed")
+		#expect(viewModel.connection.definition == .unreadable("Could not read process-compose.yaml: a ${ is never closed"))
 		#expect(!viewModel.isShowingDefinition)
 		#expect(viewModel.processes.isEmpty)
 	}

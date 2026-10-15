@@ -153,7 +153,7 @@ struct StackSummaryTests {
 			await Task.yield()
 		}
 
-		#expect(viewModel.connection == .disconnected(reason: reason))
+		#expect(viewModel.connection == .disconnected(reason: reason, definition: .none))
 	}
 
 	@Test("a connection superseded during setup cannot publish over a refused address")
@@ -176,7 +176,7 @@ struct StackSummaryTests {
 		gate.open()
 		await session.value
 
-		#expect(viewModel.connection == .disconnected(reason: reason))
+		#expect(viewModel.connection == .disconnected(reason: reason, definition: .none))
 		#expect(viewModel.processes.isEmpty)
 	}
 
@@ -191,7 +191,7 @@ struct StackSummaryTests {
 
 		viewModel.refuseAddress("Settings has no usable server address for local host:0")
 
-		#expect(viewModel.connection == .disconnected(reason: "Settings has no usable server address for local host:0"))
+		#expect(viewModel.connection == .disconnected(reason: "Settings has no usable server address for local host:0", definition: .none))
 		#expect(viewModel.processes.isEmpty)
 		#expect(viewModel.uptime == nil)
 		#expect(viewModel.selection == nil)
