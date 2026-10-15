@@ -55,8 +55,8 @@ struct StackView: View {
 		.overlay { if quit.isStopping { stoppingOverlay } }
 		.background(StackWindowHook(quit: quit))
 		.focusedSceneValue(\.windowState, windowState)
-		.navigationTitle(model.project?.projectName ?? "Process Compose")
-		.navigationSubtitle(subtitle)
+		.navigationTitle(title)
+		.toolbar(removing: .title)
 		.toolbar { toolbar }
 	}
 
@@ -229,6 +229,19 @@ struct StackView: View {
 
 	@ToolbarContentBuilder
 	private var toolbar: some ToolbarContent {
+		ToolbarItem(placement: .navigation) {
+			VStack(alignment: .leading, spacing: 1) {
+				Text(title)
+					.font(.headline)
+				Text(subtitle)
+					.font(.callout)
+					.foregroundStyle(.secondary)
+			}
+			.lineLimit(1)
+			.fixedSize()
+			.accessibilityElement(children: .combine)
+		}
+
 		ToolbarItem(placement: .status) {
 			ConnectionReadouts(
 				model: model,
@@ -398,6 +411,10 @@ struct StackView: View {
 		.contentShape(Rectangle())
 		.accessibilityElement(children: .combine)
 		.accessibilityAddTraits(.isModal)
+	}
+
+	private var title: String {
+		model.project?.projectName ?? "Process Compose"
 	}
 
 	private var subtitle: String {
